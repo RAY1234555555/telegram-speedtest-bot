@@ -113,10 +113,6 @@ log_info "Python environment setup complete."
 
 # --- Encrypt Secrets ---
 log_info "Encrypting secrets using Master Password..."
-# Use openssl to encrypt. The Master Password is provided directly.
-# We export MASTER_PASSWORD as an environment variable for openssl's -pass env: option.
-# This handles special characters in the Master Password correctly.
-ENCRYPT_CMD="openssl enc -aes-256-cbc -pbkdf2 -iter 100000 -salt -out \"$SECRETS_FILE\" -pass env:MASTER_PASSWORD_VAR"
 
 # Prepare data for encryption
 echo -n "TELEGRAM_BOT_TOKEN=" > temp_secrets_data.txt
@@ -126,9 +122,8 @@ echo -n "ALLOWED_USER_IDS=" >> temp_secrets_data.txt
 echo -n "$ALLOWED_USER_IDS" >> temp_secrets_data.txt
 echo "" >> temp_secrets_data.txt
 
-# Execute encryption. Export MASTER_PASSWORD to an env var for openssl.
-export MASTER_PASSWORD_VAR="$MASTER_PASSWORD"
-eval $ENCRYPT_CMD temp_secrets_data.txt
+# Execute encryption using proper OpenSSL syntax
+echo "$MASTER_PASSWORD" | openssl enc -aes-256-cbc -pbkdf2 -iter 100000 -salt -in temp_secrets_data.txt -out "$SECRETS_FILE" -pass stdin
 if [ $? -ne 0 ]; then
     log_error "openssl encryption failed. Ensure openssl is installed and Master Password is valid."
     rm -f temp_secrets_data.txt
