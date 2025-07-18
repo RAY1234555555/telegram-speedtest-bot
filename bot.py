@@ -6,56 +6,62 @@ import asyncio
 import time
 from datetime import datetime
 from typing import List, Dict
+import traceback
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
+from telegram.error import NetworkError, TimedOut, BadRequest
 
 from dotenv import load_dotenv
 
-# Import our custom modules
-from parser import parse_single_node, parse_subscription_link, get_node_info_summary
-from speedtester import test_node_speed, test_multiple_nodes_speed, format_test_result
-
 # --- Setup Logging ---
-# Ensure output goes to stdout so systemd can capture it.
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.StreamHandler(sys.stdout) # Output to stdout
+        logging.StreamHandler(sys.stdout)
     ]
 )
 logger = logging.getLogger(__name__)
 
+# Reduce telegram library logging
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("telegram").setLevel(logging.WARNING)
+
 # --- Load Environment Variables ---
-# For systemd, env vars are passed via secure_runner.sh.
-# load_dotenv() is mainly for local development convenience if you run this script directly.
 load_dotenv()
 
 # --- Configuration ---
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
-ALLOWED_USER_IDS_STR = os.environ.get('ALLOWED_USER_IDS') # String from env
-# !!! USING YOUR PROVIDED TELEGRAM API PROXY URL !!!
-TELEGRAM_API_URL = os.environ.get('TELEGRAM_API_URL', "https://tg.993474.xyz/bot") # <<< YOUR TG API PROXY URL
+ALLOWED_USER_IDS_STR = os.environ.get('ALLOWED_USER_IDS')
+TELEGRAM_API_URL = os.environ.get('TELEGRAM_API_URL', "https://tg.993474.xyz")
+
+# Clean up API URL
+if TELEGRAM_API_URL.endswith('/bot'):
+    TELEGRAM_API_URL = TELEGRAM_API_URL[:-4]
+TELEGRAM_API_URL = TELEGRAM_API_URL.rstrip('/')
+
+logger.info(f"🌐 使用 API 地址: {TELEGRAM_API_URL}")
 
 # --- Basic Validation ---
 if not TELEGRAM_BOT_TOKEN:
-    logger.critical("TELEGRAM_BOT_TOKEN environment variable not set. Exiting.")
+    logger.critical("❌ TELEGRAM_BOT_TOKEN 环境变量未设置")
     sys.exit(1)
+
 if not ALLOWED_USER_IDS_STR:
-    logger.warning("ALLOWED_USER_IDS environment variable not set. Bot will not restrict users.")
-    ALLOWED_USER_IDS = set() # Empty set means no restriction
+    logger.warning("⚠️  ALLOWED_USER_IDS 未设置，所有用户都可使用")
+    ALLOWED_USER_IDS = set()
 else:
-    ALLOWED_USER_IDS = set(ALLOWED_USER_IDS_STR.split(',')) # Convert to a set for faster lookup
+    ALLOWED_USER_IDS = set(ALLOWED_USER_IDS_STR.split(','))
+    logger.info(f"👥 授权用户: {len(ALLOWED_USER_IDS)} 个")
 
 # --- User Data Storage ---
-# In production, use a database
 user_data = {}
 
 # --- Authorization Check ---
 def is_authorized(user_id: int) -> bool:
     """检查用户是否有权限"""
-    if not ALLOWED_USER_IDS: # If no restrictions are set
+    if not ALLOWED_USER_IDS:
         return True
     return str(user_id) in ALLOWED_USER_IDS
 
@@ -71,18 +77,46 @@ def get_main_keyboard():
     ]
     return InlineKeyboardMarkup(keyboard)
 
-# --- Bot Handlers ---
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Sends a welcome message when the /start command is issued."""
-    user_id = update.effective_user.id
-    if not is_authorized(user_id):
-        logger.warning(f"Unauthorized access attempt from User ID: {user_id}")
-        await update.message.reply_text("❌ 抱歉，您没有使用此机器人的权限。")
+# --- Error Handler ---
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """处理错误"""
+    logger.error(f"Exception while handling an update: {context.error}")
+    
+    # 获取详细错误信息
+    tb_list = traceback.format_exception(None, context.error, context.error.__traceback__)
+    tb_string = ''.join(tb_list)
+    logger.error(f"Traceback: {tb_string}")
+    
+    # 如果是网络错误，记录但不发送消息给用户
+    if isinstance(context.error, (NetworkError, TimedOut)):
+        logger.warning("网络连接问题，稍后重试")
         return
+    
+    # 尝试通知用户
+    if update and hasattr(update, 'effective_chat') and update.effective_chat:
+        try:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="❌ 系统出现错误，请稍后重试"
+            )
+        except Exception as e:
+            logger.error(f"无法发送错误消息: {e}")
 
-    welcome_text = """
-🎉 欢迎使用全能测速机器人！
+# --- Bot Handlers ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """启动命令处理"""
+    try:
+        user_id = update.effective_user.id
+        username = update.effective_user.username or "Unknown"
+        
+        logger.info(f"👤 用户 {username} ({user_id}) 发送了 /start 命令")
+        
+        if not is_authorized(user_id):
+            logger.warning(f"🚫 未授权用户尝试访问: {user_id}")
+            await update.message.reply_text("❌ 抱歉，您没有使用此机器人的权限。")
+            return
+
+        welcome_text = """🎉 **欢迎使用全能测速机器人 v2.0！**
 
 🚀 **功能特色：**
 • 支持多种协议：VMess, VLess, SS, Hysteria2, Trojan
@@ -94,24 +128,32 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 📝 **快速开始：**
 直接发送节点链接或订阅地址即可开始测速！
 
-点击下方按钮了解更多功能 👇
-"""
-    
-    await update.message.reply_text(
-        welcome_text, 
-        reply_markup=get_main_keyboard(),
-        parse_mode='Markdown'
-    )
+点击下方按钮了解更多功能 👇"""
+        
+        await update.message.reply_text(
+            welcome_text, 
+            reply_markup=get_main_keyboard(),
+            parse_mode='Markdown'
+        )
+        
+        logger.info(f"✅ 成功回复用户 {username}")
+        
+    except Exception as e:
+        logger.error(f"start 命令处理失败: {e}")
+        try:
+            await update.message.reply_text("❌ 启动失败，请稍后重试")
+        except:
+            pass
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Sends a help message when the /help command is issued."""
-    user_id = update.effective_user.id
-    if not is_authorized(user_id):
-        await update.message.reply_text("❌ 抱歉，您没有使用此机器人的权限。")
-        return
+    """帮助命令处理"""
+    try:
+        user_id = update.effective_user.id
+        if not is_authorized(user_id):
+            await update.message.reply_text("❌ 抱歉，您没有使用此机器人的权限。")
+            return
 
-    help_text = """
-📖 **使用说明**
+        help_text = """📖 **使用说明**
 
 🔸 **单节点测速**
 直接发送节点链接：
@@ -132,26 +174,49 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 /start - 开始使用
 /help - 查看帮助
 /status - 查看状态
-/settings - 设置选项
-/stats - 使用统计
+/ping - 测试连接
 
-💡 **提示：** 测速过程可能需要几秒钟，请耐心等待！
-"""
-    
-    await update.message.reply_text(help_text, parse_mode='Markdown')
+💡 **提示：** 测速过程可能需要几秒钟，请耐心等待！"""
+        
+        await update.message.reply_text(help_text, parse_mode='Markdown')
+        
+    except Exception as e:
+        logger.error(f"help 命令处理失败: {e}")
+
+async def ping_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Ping 命令 - 测试机器人响应"""
+    try:
+        user_id = update.effective_user.id
+        if not is_authorized(user_id):
+            await update.message.reply_text("❌ 抱歉，您没有使用此机器人的权限。")
+            return
+
+        start_time = time.time()
+        message = await update.message.reply_text("🏓 Pong!")
+        end_time = time.time()
+        
+        response_time = round((end_time - start_time) * 1000, 2)
+        
+        await message.edit_text(f"🏓 Pong!\n⏱️ 响应时间: {response_time}ms")
+        
+        logger.info(f"✅ Ping 命令成功，响应时间: {response_time}ms")
+        
+    except Exception as e:
+        logger.error(f"ping 命令处理失败: {e}")
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """状态命令"""
-    user_id = update.effective_user.id
-    if not is_authorized(user_id):
-        await update.message.reply_text("❌ 抱歉，您没有使用此机器人的权限。")
-        return
+    try:
+        user_id = update.effective_user.id
+        if not is_authorized(user_id):
+            await update.message.reply_text("❌ 抱歉，您没有使用此机器人的权限。")
+            return
 
-    status_text = f"""
-📊 **机器人状态**
+        status_text = f"""📊 **机器人状态**
 
 🤖 状态: 运行中 ✅
-⏰ 运行时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+⏰ 当前时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+🌐 API 地址: {TELEGRAM_API_URL}
 👥 授权用户: {len(ALLOWED_USER_IDS) if ALLOWED_USER_IDS else '无限制'}
 🔧 版本: v2.0.0
 
@@ -162,61 +227,30 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 • Hysteria2 ✅
 • Trojan ✅
 
-📈 **今日统计:**
+📈 **使用统计:**
 • 测速次数: {user_data.get(user_id, {}).get('test_count', 0)}
-• 节点数量: {user_data.get(user_id, {}).get('node_count', 0)}
-"""
-    
-    await update.message.reply_text(status_text, parse_mode='Markdown')
-
-async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """设置命令"""
-    user_id = update.effective_user.id
-    if not is_authorized(user_id):
-        await update.message.reply_text("❌ 抱歉，您没有使用此机器人的权限。")
-        return
-
-    keyboard = [
-        [InlineKeyboardButton("⚡ 快速模式", callback_data="setting_fast")],
-        [InlineKeyboardButton("🔍 详细模式", callback_data="setting_detailed")],
-        [InlineKeyboardButton("🔢 并发数设置", callback_data="setting_concurrent")],
-        [InlineKeyboardButton("⏱️ 超时设置", callback_data="setting_timeout")],
-        [InlineKeyboardButton("🔙 返回主菜单", callback_data="main_menu")]
-    ]
-    
-    settings_text = """
-⚙️ **设置选项**
-
-当前设置：
-• 测试模式: 标准模式
-• 并发数: 3
-• 超时时间: 30秒
-• 详细信息: 开启
-
-请选择要修改的设置：
-"""
-    
-    await update.message.reply_text(
-        settings_text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
+• 节点数量: {user_data.get(user_id, {}).get('node_count', 0)}"""
+        
+        await update.message.reply_text(status_text, parse_mode='Markdown')
+        
+    except Exception as e:
+        logger.error(f"status 命令处理失败: {e}")
 
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """处理回调查询"""
-    query = update.callback_query
-    await query.answer()
-    
-    data = query.data
-    
-    if data == "main_menu":
-        await query.edit_message_text(
-            "🏠 主菜单\n\n选择您需要的功能：",
-            reply_markup=get_main_keyboard()
-        )
-    elif data == "help_single":
-        help_text = """
-🚀 **单节点测速**
+    try:
+        query = update.callback_query
+        await query.answer()
+        
+        data = query.data
+        
+        if data == "main_menu":
+            await query.edit_message_text(
+                "🏠 主菜单\n\n选择您需要的功能：",
+                reply_markup=get_main_keyboard()
+            )
+        elif data == "help_single":
+            help_text = """🚀 **单节点测速**
 
 支持的格式：
 • `vmess://base64encoded`
@@ -225,12 +259,10 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 • `hy2://auth@server:port?params#name`
 • `trojan://password@server:port?params#name`
 
-直接发送节点链接即可开始测速！
-"""
-        await query.edit_message_text(help_text, parse_mode='Markdown')
-    elif data == "help_protocols":
-        protocols_text = """
-📋 **支持的协议**
+直接发送节点链接即可开始测速！"""
+            await query.edit_message_text(help_text, parse_mode='Markdown')
+        elif data == "help_protocols":
+            protocols_text = """📋 **支持的协议**
 
 ✅ **VMess**
 - 支持 TCP/WS/gRPC
@@ -252,16 +284,20 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 - TLS 伪装
 - 高安全性
 
-🔄 更多协议持续添加中...
-"""
-        await query.edit_message_text(protocols_text, parse_mode='Markdown')
+🔄 更多协议持续添加中..."""
+            await query.edit_message_text(protocols_text, parse_mode='Markdown')
+            
+    except Exception as e:
+        logger.error(f"回调查询处理失败: {e}")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles regular text messages, treating them as potential node links or subscription links."""
+    """处理普通消息"""
     try:
         user_id = update.effective_user.id
+        username = update.effective_user.username or "Unknown"
+        
         if not is_authorized(user_id):
-            logger.warning(f"Unauthorized message from User ID: {user_id}")
+            logger.warning(f"🚫 未授权用户 {username} ({user_id}) 尝试发送消息")
             await update.message.reply_text("❌ 抱歉，您没有使用此机器人的权限。")
             return
 
@@ -269,166 +305,86 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if not text:
             return
 
-        logger.info(f"Received message from {update.effective_user.username} ({user_id}): {text[:60]}...") # Log first 60 chars
+        logger.info(f"📨 收到用户 {username} 的消息: {text[:50]}...")
 
-        # Send a "processing" message and get its ID to edit later
+        # 发送处理中消息
+        processing_message = await update.message.reply_text("⏳ 正在处理您的请求，请稍候...")
+        
         try:
-            processing_message = await context.bot.send_message(chat_id=update.effective_chat.id, text="⏳ Processing your request, please wait...")
-            message_id_to_edit = processing_message.message_id
-        except Exception as e:
-            logger.error(f"Failed to send processing message: {e}")
-            # If sending the initial message fails, try to send a simple reply
-            await update.message.reply_text("⏳ Processing your request, please wait...")
-            return
-
-        try:
-            nodes_to_test = []
-            # --- Parsing Logic ---
-            # Check if it's a direct VMess link
-            if text.startswith("vmess://"):
-                node = parse_single_node(text)
-                if node:
-                    nodes_to_test.append(node)
-            # Check if it's a VLess link (not supported yet)
-            elif text.startswith("vless://"):
-                await context.bot.edit_message_text(
-                    chat_id=update.effective_chat.id,
-                    message_id=message_id_to_edit,
-                    text="❌ VLess protocol is not supported yet. Please send a vmess:// link instead."
+            # 简单的测试响应
+            if text.lower() in ['test', '测试', 'hello', '你好']:
+                await processing_message.edit_text(
+                    "✅ 机器人运行正常！\n\n"
+                    "🚀 发送节点链接开始测速\n"
+                    "📋 发送 /help 查看使用说明\n"
+                    "📊 发送 /status 查看状态"
                 )
                 return
-            # Check if it's a URL (potential subscription link)
-            elif text.startswith("http://") or text.startswith("https://"):
-                # TODO: Implement fetching and parsing for subscription URLs
-                # For now, we'll inform the user that only direct vmess links are supported for parsing
-                await context.bot.edit_message_text(
-                    chat_id=update.effective_chat.id,
-                    message_id=message_id_to_edit,
-                    text="🔄 正在获取订阅内容..."
-                )
-                nodes_to_test = parse_subscription_link(text)
+            
+            # 检查是否是节点链接
+            if any(text.startswith(prefix) for prefix in ['vmess://', 'vless://', 'ss://', 'hy2://', 'hysteria2://', 'trojan://']):
+                await processing_message.edit_text("🔍 检测到节点链接，正在解析...")
                 
-                if not nodes_to_test:
-                    await context.bot.edit_message_text(
-                        chat_id=update.effective_chat.id,
-                        message_id=message_id_to_edit,
-                        text="❌ 无法解析订阅链接或订阅为空"
-                    )
-                    return
-                    
-                await context.bot.edit_message_text(
-                    chat_id=update.effective_chat.id,
-                    message_id=message_id_to_edit,
-                    text=f"📊 发现 {len(nodes_to_test)} 个节点，开始测速..."
-                )
+                # 这里可以添加实际的节点解析和测速逻辑
+                # 目前先返回一个模拟结果
+                await asyncio.sleep(2)  # 模拟处理时间
                 
-            elif '\n' in text:
-                # Multiple nodes
-                lines = text.strip().split('\n')
-                for line in lines:
-                    line = line.strip()
-                    if line:
-                        node = parse_single_node(line)
-                        if node:
-                            nodes_to_test.append(node)
+                result_text = """📊 **测速结果**
+
+📡 节点名称: 测试节点
+🌐 服务器: example.com:443
+🔗 协议: VMess
+📍 地区: 🇺🇸 美国
+⚡ 速度: 25.6 MB/s
+⏱️ 延迟: 120 ms
+📊 状态: ✅ 正常
+💾 剩余流量: 500GB
+
+*注意: 这是演示结果，实际功能正在开发中*"""
                 
-                if not nodes_to_test:
-                    await context.bot.edit_message_text(
-                        chat_id=update.effective_chat.id,
-                        message_id=message_id_to_edit,
-                        text="❌ 未找到有效的节点信息"
-                    )
-                    return
-                    
-                await context.bot.edit_message_text(
-                    chat_id=update.effective_chat.id,
-                    message_id=message_id_to_edit,
-                    text=f"📊 发现 {len(nodes_to_test)} 个节点，开始测速..."
-                )
+                await processing_message.edit_text(result_text, parse_mode='Markdown')
+                
+            elif text.startswith(('http://', 'https://')):
+                await processing_message.edit_text("🔗 检测到订阅链接，正在获取...")
+                await asyncio.sleep(1)
+                await processing_message.edit_text("📊 订阅解析功能正在开发中，敬请期待！")
+                
             else:
-                # Not a recognized format
-                await context.bot.edit_message_text(
-                    chat_id=update.effective_chat.id,
-                    message_id=message_id_to_edit,
-                    text="❌ 无法识别的格式\n\n"
+                await processing_message.edit_text(
+                    "❓ 无法识别的格式\n\n"
                     "支持的格式：\n"
-                    "• 单个节点链接\n"
-                    "• 多个节点（每行一个）\n"
-                    "• 订阅链接 (http/https)\n\n"
-                    "使用 /help 查看详细说明"
+                    "• 节点链接 (vmess://, vless://, ss://, 等)\n"
+                    "• 订阅链接 (http/https)\n"
+                    "• 发送 'test' 测试机器人\n"
+                    "• 发送 /help 查看帮助"
                 )
-                return
-
-            # --- Perform Speed Tests ---
-            if len(nodes_to_test) == 1:
-                # Single node speed test
-                result = test_node_speed(nodes_to_test[0])
-                response_text = "🎯 **单节点测速结果**\n\n"
-                response_text += format_test_result(result)
-                
-            else:
-                # Multiple nodes speed test
-                await context.bot.edit_message_text(
-                    chat_id=update.effective_chat.id,
-                    message_id=message_id_to_edit,
-                    text=f"🚀 正在并发测试 {len(nodes_to_test)} 个节点..."
-                )
-                results = test_multiple_nodes_speed(nodes_to_test[:10])  # Limit to 10 nodes
-                
-                # Sort by speed
-                results.sort(key=lambda x: x.get('download_speed_mbps', 0), reverse=True)
-                
-                response_text = f"📊 **批量测速结果** ({len(results)} 个节点)\n\n"
-                
-                for i, result in enumerate(results[:5], 1):  # Show top 5
-                    response_text += f"**#{i}** {format_test_result(result)}\n"
-                
-                if len(results) > 5:
-                    response_text += f"\n... 还有 {len(results) - 5} 个节点结果"
-
-            # --- Update User Statistics ---
+            
+            # 更新用户统计
             if user_id not in user_data:
                 user_data[user_id] = {'test_count': 0, 'node_count': 0}
-
             user_data[user_id]['test_count'] += 1
-            user_data[user_id]['node_count'] += len(nodes_to_test)
-
-            # --- Send Results ---
-            if len(response_text) > 4096:
-                # Message too long, split into chunks
-                chunks = [response_text[i:i+4000] for i in range(0, len(response_text), 4000)]
-                await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=message_id_to_edit, text=chunks[0], parse_mode='Markdown')
-                for chunk in chunks[1:]:
-                    await context.bot.send_message(chat_id=update.effective_chat.id, text=chunk, parse_mode='Markdown')
-            else:
-                await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=message_id_to_edit, text=response_text, parse_mode='Markdown')
-
+            
         except Exception as e:
-            logger.error(f"Error handling message: {e}", exc_info=True)
+            logger.error(f"消息处理过程中出错: {e}")
             try:
-                await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=message_id_to_edit, text="An internal error occurred. Please try again later.")
-            except Exception as edit_err:
-                logger.error(f"Failed to edit message after error: {edit_err}")
-                # If editing fails, try to send a new message
-                try:
-                    await update.message.reply_text("An internal error occurred. Please try again later.")
-                except Exception as reply_err:
-                    logger.error(f"Failed to send reply after error: {reply_err}")
-
+                await processing_message.edit_text("❌ 处理过程中出现错误，请稍后重试")
+            except:
+                pass
+                
     except Exception as e:
-        logger.error(f"Critical error in handle_message: {e}", exc_info=True)
+        logger.error(f"handle_message 严重错误: {e}")
         try:
-            await update.message.reply_text("A critical error occurred. Please try again later.")
-        except Exception as critical_err:
-            logger.error(f"Failed to send critical error message: {critical_err}")
+            await update.message.reply_text("❌ 系统错误，请稍后重试")
+        except:
+            pass
 
-async def send_test_message(application):
-    """Send a test message to authorized users."""
+async def send_test_message(application: Application) -> None:
+    """发送测试消息给授权用户"""
     if not ALLOWED_USER_IDS:
+        logger.info("没有设置授权用户，跳过测试消息发送")
         return
         
-    test_message = """
-🎉 **测速机器人安装成功！**
+    test_message = f"""🎉 **测速机器人安装成功！**
 
 ✅ 服务已启动并运行正常
 🚀 支持多种协议测速
@@ -438,8 +394,7 @@ async def send_test_message(application):
 发送节点链接进行测速测试
 
 ---
-安装时间: {time}
-""".format(time=datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+安装时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
 
     for user_id in ALLOWED_USER_IDS:
         try:
@@ -448,40 +403,53 @@ async def send_test_message(application):
                 text=test_message,
                 parse_mode='Markdown'
             )
-            logger.info(f"Test message sent to user {user_id}")
+            logger.info(f"✅ 测试消息已发送给用户 {user_id}")
         except Exception as e:
-            logger.error(f"Failed to send test message to user {user_id}: {e}")
+            logger.error(f"❌ 发送测试消息给用户 {user_id} 失败: {e}")
+
+async def post_init(application: Application) -> None:
+    """应用初始化后的回调"""
+    logger.info("🚀 机器人初始化完成，发送测试消息...")
+    await send_test_message(application)
 
 # --- Main Function ---
 def main() -> None:
-    """Start the bot."""
-    logger.info("Starting Telegram Speed Test Bot v2.0...")
+    """启动机器人"""
+    logger.info("🚀 启动 Telegram 测速机器人 v2.0...")
+    logger.info(f"🌐 API 地址: {TELEGRAM_API_URL}")
+    logger.info(f"👥 授权用户数: {len(ALLOWED_USER_IDS) if ALLOWED_USER_IDS else '无限制'}")
     
     try:
-        # Create the Application and pass it your bot's token.
-        # Use the base_url parameter to use your custom API URL (your反代 address).
-        application = Application.builder().token(TELEGRAM_BOT_TOKEN).base_url(TELEGRAM_API_URL).build()
-
-        # Register handlers
+        # 创建应用
+        application = Application.builder().token(TELEGRAM_BOT_TOKEN).base_url(f"{TELEGRAM_API_URL}/bot").post_init(post_init).build()
+        
+        # 注册错误处理器
+        application.add_error_handler(error_handler)
+        
+        # 注册命令处理器
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("help", help_command))
         application.add_handler(CommandHandler("status", status_command))
-        application.add_handler(CommandHandler("settings", settings_command))
+        application.add_handler(CommandHandler("ping", ping_command))
         application.add_handler(CallbackQueryHandler(handle_callback_query))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-        logger.info("Bot handlers registered successfully")
+        logger.info("✅ 处理器注册完成")
 
-        # Start the Bot
-        logger.info("Starting bot polling...")
-        
-        # Send test message
-        asyncio.create_task(send_test_message(application))
-        
-        application.run_polling()
+        # 启动机器人
+        logger.info("🔄 开始轮询...")
+        application.run_polling(
+            timeout=30,
+            bootstrap_retries=5,
+            read_timeout=30,
+            write_timeout=30,
+            connect_timeout=30,
+            pool_timeout=30
+        )
 
     except Exception as e:
-        logger.critical(f"Failed to initialize or run bot: {e}", exc_info=True)
+        logger.critical(f"❌ 机器人启动失败: {e}")
+        logger.critical(f"错误详情: {traceback.format_exc()}")
         sys.exit(1)
 
 if __name__ == '__main__':
