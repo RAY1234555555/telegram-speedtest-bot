@@ -4,24 +4,18 @@
 # Ensure this script has 700 permissions.
 
 # --- Configuration ---
-# Master Password is provided via stdin by the caller script.
+# Master Password is provided as the first argument from the caller script (secure_runner.sh).
+MASTER_PASSWORD="$1"
 SECRET_FILE="/opt/telegram-speedtest-bot/secrets.enc"
 
 # --- Validate Input ---
-if [[ ! -f "$SECRET_FILE" ]]; then
-    echo "Error: Secrets file ($SECRET_FILE) not found. Exiting." >&2
-    exit 1
-fi
-
-# Read Master Password from stdin
-# Using IFS= and -r prevents backslashes from being interpreted and leading/trailing whitespace from being trimmed.
-if ! IFS= read -r MASTER_PASSWORD; then
-    echo "Error: Could not read Master Password from stdin. Exiting." >&2
-    exit 1
-fi
-
 if [[ -z "$MASTER_PASSWORD" ]]; then
     echo "Error: Master Password is empty. Exiting." >&2
+    exit 1
+fi
+
+if [[ ! -f "$SECRET_FILE" ]]; then
+    echo "Error: Secrets file ($SECRET_FILE) not found. Exiting." >&2
     exit 1
 fi
 
