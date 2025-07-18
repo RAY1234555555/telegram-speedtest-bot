@@ -1,4 +1,3 @@
-# parser.py
 import base64
 import json
 import logging
@@ -22,14 +21,14 @@ def parse_vmess_link(link: str) -> dict | None:
         # Extract necessary information
         parsed_node = {
             "name": node_info.get("ps", "Unknown Node"), # Display name
-            "server": node.get("add"), # Use original link server if available, else from parsed
+            "server": node_info.get("add"), # Server address from parsed data
             "port": node_info.get("port"),
             "uuid": node_info.get("id"),
             "alterId": node_info.get("aid"),
             "protocol": "vmess",
             "tls": node_info.get("tls", ""), # "tls" or ""
             "network": node_info.get("net", "tcp"), # Default to tcp
-            "security": node.get("scy", "auto"), # Use original link security if available, else auto
+            "security": node_info.get("scy", "auto"), # Security method
             "host": node_info.get("host", ""), # For WS/gRPC Host header
             "path": node_info.get("path", ""), # For WS path
         }
