@@ -1,8 +1,9 @@
-# speedtester.py
 import subprocess
 import logging
 import time
 import os
+import json
+import base64
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +179,10 @@ def test_node_speed(node: dict) -> dict:
 
 # --- For testing ---
 if __name__ == "__main__":
+    import json
+    import base64
+    from parser import parse_vmess_link
+    
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
     # Mocked valid vmess link for testing
