@@ -1,0 +1,52 @@
+#!/bin/bash
+# This script is executed by systemd to run the Telegram bot securely.
+# CRITICAL: Master Password is hardcoded here for non-interactive execution.
+# Its security relies on the file's 700 permissions and restricting access to the user.
+
+# --- Configuration ---
+# !!! MASTER PASSWORD IS EMBEDDED HERE BY THE INSTALL SCRIPT !!!
+# It should be a strong, randomly generated password.
+MASTER_PASSWORD="YOUR_HARDCODED_MASTER_PASSWORD_FROM_INSTALL_SCRIPT" # <<< REPLACE THIS
+
+BOT_TOKEN=""
+USER_IDS=""
+
+SECRETS_FILE="/opt/telegram-speedtest-bot/secrets.enc"
+DECRYPT_SCRIPT="/opt/telegram-speedtest-bot/decrypt_secrets.sh"
+BOT_VENV_PATH="/opt/telegram-speedtest-bot/venv/bin/activate"
+BOT_MAIN_SCRIPT="/opt/telegram-speedtest-bot/bot.py"
+BOT_INSTALL_DIR="/opt/telegram-speedtest-bot"
+TELEGRAM_API_URL="https://tg.993474.xyz" # <<< YOUR TG API PROXY URL
+
+# --- Decrypt secrets ---
+# Check if secrets file and decrypt script exist
+if [[ ! -f "$SECRETS_FILE" || ! -f "$DECRYPT_SCRIPT" ]]; then
+  echo "Error: Secrets file or decrypt script not found. Exiting." >&2
+  exit 1
+fi
+
+# Decrypt secrets.enc using the Master Password by piping it to the decrypt script.
+# The decrypt script needs the Master Password as its first argument.
+DECRYPTED_DATA=$(echo "$MASTER_PASSWORD" | bash "$DECRYPT_SCRIPT" 2>/dev/null)
+
+if [[ $? -ne 0 || -z "$DECRYPTED_DATA" ]]; then
+  echo "Error: Failed to decrypt secrets. Incorrect Master Password or corrupted file. Exiting." >&2
+  exit 1
+fi
+
+# Parse the decrypted data
+BOT_TOKEN=$(echo "$DECRYPTED_DATA" | grep "^TELEGRAM_BOT_TOKEN=" | cut -d'=' -f2-)
+USER_IDS=$(echo "$DECRYPTED_DATA" | grep "^ALLOWED_USER_IDS=" | cut -d'=' -f2-)
+
+if [[ -z "$BOT_TOKEN" || -z "$USER_IDS" ]]; then
+  echo "Error: Could not parse Bot Token or User IDs from decrypted data. Exiting." >&2
+  exit 1
+fi
+
+# --- Activate environment and run the bot ---
+echo "Starting Telegram bot..."
+export TELEGRAM_BOT_TOKEN="$BOT_TOKEN"
+export ALLOWED_USER_IDS="$USER_IDS"
+export TELEGRAM_API_URL="$TELEGRAM_API_URL" # Export the API URL as well
+
+cd "$BOT_INSTALL_DIR" && source "$BOT_VENV_PATH" && python "$BOT_MAIN_SCRIPT"
