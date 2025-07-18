@@ -6,7 +6,7 @@ import subprocess # For update command (can be added later)
 import base64
 
 from telegram import Update
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 from dotenv import load_dotenv # For local testing primarily
 
@@ -55,12 +55,12 @@ def is_authorized(user_id: int) -> bool:
 
 # --- Bot Handlers ---
 
-def start(update: Update, context: CallbackContext) -> None:
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Sends a welcome message when the /start command is issued."""
     user_id = update.effective_user.id
     if not is_authorized(user_id):
         logger.warning(f"Unauthorized access attempt from User ID: {user_id}")
-        update.message.reply_text("Sorry, you are not authorized to use this bot.")
+        await update.message.reply_text("Sorry, you are not authorized to use this bot.")
         return
 
     welcome_message = (
@@ -70,14 +70,14 @@ def start(update: Update, context: CallbackContext) -> None:
         "Supported formats: vmess:// (direct link).\n"
         "Use /help for more information."
     )
-    update.message.reply_text(welcome_message)
+    await update.message.reply_text(welcome_message)
 
-def help_command(update: Update, context: CallbackContext) -> None:
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Sends a help message when the /help command is issued."""
     user_id = update.effective_user.id
     if not is_authorized(user_id):
         logger.warning(f"Unauthorized access attempt from User ID: {user_id}")
-        update.message.reply_text("Sorry, you are not authorized to use this bot.")
+        await update.message.reply_text("Sorry, you are not authorized to use this bot.")
         return
 
     help_text = (
@@ -90,14 +90,14 @@ def help_command(update: Update, context: CallbackContext) -> None:
         "The bot will attempt to parse the provided link(s) and test the node speed.\n"
         "Please be patient as tests may take a moment."
     )
-    update.message.reply_text(help_text)
+    await update.message.reply_text(help_text)
 
-def handle_message(update: Update, context: CallbackContext) -> None:
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles regular text messages, treating them as potential node links or subscription links."""
     user_id = update.effective_user.id
     if not is_authorized(user_id):
         logger.warning(f"Unauthorized message from User ID: {user_id}")
-        update.message.reply_text("Sorry, you are not authorized to use this bot.")
+        await update.message.reply_text("Sorry, you are not authorized to use this bot.")
         return
 
     text = update.message.text
@@ -108,7 +108,7 @@ def handle_message(update: Update, context: CallbackContext) -> None:
 
     # Send a "processing" message and get its ID to edit later
     try:
-        processing_message = context.bot.send_message(chat_id=update.effective_chat.id, text="⏳ Processing your request, please wait...")
+        processing_message = await context.bot.send_message(chat_id=update.effective_chat.id, text="⏳ Processing your request, please wait...")
         message_id_to_edit = processing_message.message_id
     except Exception as e:
         logger.error(f"Failed to send processing message: {e}")
@@ -127,7 +127,7 @@ def handle_message(update: Update, context: CallbackContext) -> None:
         elif text.startswith("http://") or text.startswith("https://"):
             # TODO: Implement fetching and parsing for subscription URLs
             # For now, we'll inform the user that only direct vmess links are supported for parsing
-            context.bot.edit_message_text(
+            await context.bot.edit_message_text(
                 chat_id=update.effective_chat.id,
                 message_id=message_id_to_edit,
                 text="❌ Currently, only direct vmess:// links are supported for parsing. Subscription URL fetching is not yet implemented."
@@ -135,7 +135,7 @@ def handle_message(update: Update, context: CallbackContext) -> None:
             return
         else:
             # Not a recognized format
-            context.bot.edit_message_text(
+            await context.bot.edit_message_text(
                 chat_id=update.effective_chat.id,
                 message_id=message_id_to_edit,
                 text="❌ Could not parse the provided node information. Please check the format or send a vmess:// link."
@@ -144,7 +144,7 @@ def handle_message(update: Update, context: CallbackContext) -> None:
 
         # --- Perform Speed Tests ---
         if not nodes_to_test:
-            context.bot.edit_message_text(
+            await context.bot.edit_message_text(
                 chat_id=update.effective_chat.id,
                 message_id=message_id_to_edit,
                 text="❌ No valid nodes were parsed from your input."
@@ -169,12 +169,12 @@ def handle_message(update: Update, context: CallbackContext) -> None:
                     f"  ⏱️ Latency: {result.get('latency_ms', 0.0):.2f} ms\n"
                     f"  🎫 Status: {status_emoji} {result.get('status')}\n"
                 )
-        context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=message_id_to_edit, text=response_text)
+        await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=message_id_to_edit, text=response_text)
 
     except Exception as e:
         logger.error(f"Error handling message: {e}", exc_info=True)
         try:
-            context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=message_id_to_edit, text="An internal error occurred. Please try again later.")
+            await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=message_id_to_edit, text="An internal error occurred. Please try again later.")
         except Exception as edit_err:
             logger.error(f"Failed to edit message after error: {edit_err}")
 
@@ -191,24 +191,19 @@ def main() -> None:
     logger.info(f"Using Telegram API URL: {TELEGRAM_API_URL}")
     logger.info(f"Authorized User IDs: {ALLOWED_USER_IDS if ALLOWED_USER_IDS else 'None (all users allowed)'}")
 
-    # Create the Updater and pass it your bot's token.
+    # Create the Application and pass it your bot's token.
     # Use the base_url parameter to use your custom API URL (your反代 address).
     try:
-        updater = Updater(TELEGRAM_BOT_TOKEN, use_context=True, base_url=TELEGRAM_API_URL)
-        dispatcher = updater.dispatcher
+        application = Application.builder().token(TELEGRAM_BOT_TOKEN).base_url(TELEGRAM_API_URL).build()
 
         # Register handlers
-        dispatcher.add_handler(CommandHandler("start", start))
-        dispatcher.add_handler(CommandHandler("help", help_command))
-        dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("help", help_command))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
         # Start the Bot
-        logger.info("Updater initialized. Starting polling...")
-        updater.start_polling()
-
-        # Run the bot until interrupted (handled by systemd)
-        updater.idle()
-        logger.info("Bot stopped (this should ideally not be reached if systemd is managing it). Shutting down.")
+        logger.info("Application initialized. Starting polling...")
+        application.run_polling()
 
     except Exception as e:
         logger.critical(f"Failed to initialize or run bot: {e}", exc_info=True)
