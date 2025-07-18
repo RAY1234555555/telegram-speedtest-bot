@@ -1,7 +1,6 @@
 #!/bin/bash
-# Decrypts secrets.enc using a Master Password provided via stdin.
-# CRITICAL: Master Password is provided via stdin from secure_runner.sh.
-# Ensure this script has 700 permissions.
+# Decrypts secrets.enc using a Master Password provided as the first argument.
+# CRITICAL: Ensure this script has 700 permissions.
 
 # --- Configuration ---
 # Master Password is provided as the first argument from the caller script (secure_runner.sh).
@@ -21,7 +20,7 @@ fi
 
 # --- Decrypt and output ---
 # Use openssl to decrypt. Pass password via stdin.
-# Ensure encryption parameters match those used in encrypt_secrets.sh
+# Ensure encryption parameters match those used in install_bot_service.sh
 DECRYPTED_DATA=$(echo "$MASTER_PASSWORD" | openssl enc -d -aes-256-cbc -pbkdf2 -iter 100000 -salt -pass stdin -in "$SECRET_FILE")
 
 if [[ $? -ne 0 || -z "$DECRYPTED_DATA" ]]; then
