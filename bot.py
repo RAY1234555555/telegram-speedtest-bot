@@ -439,12 +439,10 @@ def main() -> None:
         # 启动机器人
         logger.info("🔄 开始轮询...")
         application.run_polling(
+            poll_interval=1.0,
             timeout=30,
             bootstrap_retries=5,
-            read_timeout=30,
-            write_timeout=30,
-            connect_timeout=30,
-            pool_timeout=30
+            drop_pending_updates=True
         )
 
     except Exception as e:
