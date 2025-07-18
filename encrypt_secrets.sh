@@ -50,7 +50,7 @@ echo -n "$ALLOWED_USER_IDS" >> temp_secrets_data.txt
 echo "" >> temp_secrets_data.txt
 
 # Perform encryption
-echo "$MASTER_PASSWORD" | $ENCRYPTION_CMD -out "$SECRETS_FILE" -pass stdin temp_secrets_data.txt
+$ENCRYPTION_CMD -in temp_secrets_data.txt -out "$SECRETS_FILE" -pass pass:"$MASTER_PASSWORD"
 if [ $? -ne 0 ]; then
     log_error "openssl encryption failed. Ensure openssl is installed and Master Password is valid."
     rm -f temp_secrets_data.txt
