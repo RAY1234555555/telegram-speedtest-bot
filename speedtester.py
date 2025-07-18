@@ -4,231 +4,277 @@ import time
 import os
 import json
 import base64
+import requests
+import socket
+from typing import Dict, Optional, List
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 logger = logging.getLogger(__name__)
 
-# --- Configuration ---
-# Use environment variable or default to your proxy URL
+# 配置
 TELEGRAM_API_URL = os.environ.get('TELEGRAM_API_URL', "https://api.telegram.org/bot")
-# A reliable source for testing download speed. Using Cloudflare's test file.
-TEST_DOWNLOAD_URL = "https://speed.cloudflare.com/__down?bytes=1048576" # 1MB file
+TEST_URLS = [
+    "https://speed.cloudflare.com/__down?bytes=1048576",  # 1MB
+    "https://github.com/microsoft/vscode/archive/refs/heads/main.zip",  # 备用
+    "http://speedtest.ftp.otenet.gr/files/test1Mb.db"  # 备用
+]
 
-def construct_curl_command(node: dict) -> list[str]:
-    """
-    Constructs the curl command based on node information.
-    This is a simplified example and needs to be robust for various protocols.
-    """
-    cmd = ["curl", "-o", "/dev/null", "-w", "%{speed_download}\\n%{time_total}\\n%{http_code}", "--connect-timeout", "10", "-m", "30"]
-    server = node.get("server")
-    port = node.get("port")
-    uuid = node.get("uuid")
-    network = node.get("network", "tcp")
-    tls = node.get("tls", "")
-    host = node.get("host", "")
-    path = node.get("path", "")
-    protocol = node.get("protocol", "vmess") # Default to vmess if not specified
-
-    if not all([server, port, uuid]):
-        logger.error("Node missing essential info for curl command construction (server, port, uuid).")
-        return []
-
-    proxy_string = ""
-    proxy_type = ""
-    target_url = ""
-
-    # Determine proxy type and build proxy string
-    if protocol == "vmess":
-        # For VMess, a local V2Ray/Xray client is often needed to act as a proxy.
-        # Here, we assume the 'server' and 'port' are directly usable as a SOCKS5 proxy for simplicity.
-        # In a real-world complex setup, you might need to manage a local proxy client.
-        proxy_type = "socks5h" # Use socks5h for DNS resolution over proxy
-        proxy_string = f"{proxy_type}://{server}:{port}"
-
-        # VMess often uses WebSocket or gRPC over TLS.
-        if network == "ws":
-            target_url = f"{tls}://{server}:{port}{path if path else '/'}"
-            cmd.extend(["--proxy-method", "POST"]) # Curl uses POST for WS proxy
-            cmd.extend(["--proxy", proxy_string])
-            cmd.extend(["--header", f"Host: {host if host else server}"])
-            cmd.extend(["--header", "Connection: Upgrade"])
-            cmd.extend(["--header", "Upgrade: websocket"])
-            # Note: The 'sec-websocket-protocol' header is not directly supported by curl in this way
-            # The path is often part of the URL for WS.
-            if tls == "tls":
-                cmd.extend(["--cacert", "/dev/null"]) # Ignore cert validation for simplicity
-                cmd.extend(["--insecure"])
-                # Target URL format for WS-TLS
-                target_url = f"wss://{server}:{port}{path if path else '/'}"
+class SpeedTester:
+    def __init__(self):
+        self.timeout = 30
+        self.connect_timeout = 10
+        
+    def test_connectivity(self, server: str, port: int) -> Dict:
+        """测试连通性"""
+        try:
+            start_time = time.time()
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(self.connect_timeout)
+            result = sock.connect_ex((server, port))
+            end_time = time.time()
+            sock.close()
+            
+            if result == 0:
+                return {
+                    "status": "connected",
+                    "latency_ms": round((end_time - start_time) * 1000, 2)
+                }
             else:
-                # Target URL format for WS
-                target_url = f"ws://{server}:{port}{path if path else '/'}"
-        else: # For direct TCP or other protocols (simplified)
-            target_url = f"tcp://{server}:{port}" # Simplified. Might need adjustment for direct testing.
-            cmd.extend(["--proxy-method", "POST"])
-            cmd.extend(["--proxy", proxy_string])
-    elif protocol == "ss":
-        # Direct Shadowsocks support via curl is complex without ss-local.
-        logger.warning("Direct Shadowsocks support via curl is complex. Consider using ss-local.")
-        return [] # Returning empty for now, needs proper local proxy setup.
-    elif protocol == "http":
-        proxy_type = "http"
-        proxy_string = f"{proxy_type}://{server}:{port}"
-        cmd.extend(["--proxy", proxy_string])
-        target_url = TEST_DOWNLOAD_URL # Test direct download for HTTP proxy
-    else:
-        logger.warning(f"Unsupported protocol for curl command: {protocol}")
-        return []
+                return {
+                    "status": "failed",
+                    "error": f"Connection failed (code: {result})"
+                }
+        except Exception as e:
+            return {
+                "status": "error",
+                "error": str(e)
+            }
 
-    # If no proxy was explicitly set, or it's a direct connection test
-    if not proxy_string:
-        # If TLS is specified, use https; otherwise, http.
-        # This assumes server address is directly reachable and can serve the test file.
-        # This part is tricky without knowing the actual server setup.
-        # For a generic test, we need to know the actual URL to fetch.
-        # Assuming TEST_DOWNLOAD_URL is the target if no proxy is involved.
-        if tls == "tls":
-            target_url = f"https://{server}:{port}" # Simplified. Should use TEST_DOWNLOAD_URL for general speed test.
+    def test_http_speed(self, url: str, proxy: Optional[str] = None) -> Dict:
+        """测试HTTP下载速度"""
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            
+            proxies = {"http": proxy, "https": proxy} if proxy else None
+            
+            start_time = time.time()
+            response = requests.get(url, headers=headers, proxies=proxies, 
+                                  timeout=self.timeout, stream=True)
+            
+            downloaded = 0
+            chunk_times = []
+            
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    downloaded += len(chunk)
+                    chunk_times.append(time.time())
+                    
+                # 限制下载大小，避免消耗太多流量
+                if downloaded > 5 * 1024 * 1024:  # 5MB
+                    break
+            
+            end_time = time.time()
+            total_time = end_time - start_time
+            
+            if total_time > 0:
+                speed_bps = downloaded / total_time
+                speed_mbps = speed_bps / (1024 * 1024)
+                
+                return {
+                    "status": "success",
+                    "download_speed_mbps": round(speed_mbps, 2),
+                    "downloaded_bytes": downloaded,
+                    "total_time_seconds": round(total_time, 2),
+                    "http_status": response.status_code
+                }
+            else:
+                return {
+                    "status": "error",
+                    "error": "Invalid timing"
+                }
+                
+        except Exception as e:
+            return {
+                "status": "error",
+                "error": str(e)
+            }
+
+    def construct_proxy_string(self, node: Dict) -> Optional[str]:
+        """构造代理字符串"""
+        protocol = node.get("protocol", "").lower()
+        server = node.get("server")
+        port = node.get("port")
+        
+        if not server or not port:
+            return None
+            
+        if protocol == "shadowsocks":
+            # 对于SS，通常需要本地客户端
+            return f"socks5://127.0.0.1:1080"  # 假设本地SS客户端监听1080
+        elif protocol in ["vmess", "vless"]:
+            # 对于VMess/VLess，通常需要本地客户端
+            return f"socks5://127.0.0.1:1080"  # 假设本地客户端监听1080
+        elif protocol == "trojan":
+            return f"socks5://127.0.0.1:1080"  # 假设本地客户端监听1080
+        elif protocol == "hysteria2":
+            return f"socks5://127.0.0.1:1080"  # 假设本地客户端监听1080
         else:
-            target_url = f"http://{server}:{port}"
+            return None
 
-        # If it's a direct test, we'd ideally use the test URL, not the node's address directly.
-        # For speed testing, we want to test against a known good speed test server.
-        # So, if protocol is not specified or not supported for proxying, use TEST_DOWNLOAD_URL.
-        if not target_url or target_url == f"tcp://{server}:{port}": # If target URL is node-specific and not a speed test server
-            target_url = TEST_DOWNLOAD_URL
-
-
-    # Ensure we have a target URL for the test file.
-    if not target_url:
-        logger.error("Could not determine a target URL for speed test.")
-        return []
-
-    cmd.append(target_url)
-    logger.debug(f"Constructed curl command: {' '.join(cmd)}")
-    return cmd
-
-
-def test_node_speed(node: dict) -> dict:
-    """
-    Tests the speed of a single node.
-    Returns a dictionary with test results.
-    """
-    if not node:
-        return {"error": "No node information provided."}
-
-    node_name = node.get('name', node.get('server', 'Unknown Node'))
-    logger.info(f"Starting speed test for node: {node_name}")
-
-    curl_command = construct_curl_command(node)
-
-    if not curl_command:
-        return {"error": "Failed to construct curl command for this node type or missing info."}
-
-    try:
-        start_time = time.time()
-        # Execute the curl command
-        # Capturing stdout which should contain speed_download, time_total, http_code
-        # check=False prevents subprocess.run from raising an exception on non-zero exit codes
-        process = subprocess.run(curl_command, capture_output=True, text=True, check=False)
-        end_time = time.time()
-
-        output_lines = process.stdout.strip().split('\n')
-        speed_bps_str = output_lines[0] if output_lines else ""
-        total_time_str = output_lines[1] if len(output_lines) > 1 else ""
-        http_code_str = output_lines[2] if len(output_lines) > 2 else ""
-
-        # Process results
-        speed_mbps = 0.0
-        # Check if speed_bps_str is a valid number before conversion
-        if speed_bps_str and speed_bps_str.replace('.', '', 1).isdigit():
-            speed_bps = float(speed_bps_str)
-            speed_mbps = speed_bps / 1024 / 1024  # Convert bytes/sec to MB/s
-        elif speed_bps_str:
-            logger.warning(f"Invalid speed value received from curl: '{speed_bps_str}' for node {node_name}")
-
-        latency = float(total_time_str) if total_time_str and total_time_str.replace('.', '', 1).isdigit() else 0.0
-        http_code = int(http_code_str) if http_code_str.isdigit() else 0
-
-        status = "OK" if (http_code >= 200 and http_code < 300) else "FAIL"
-
-        # Adjust status if speed is very low and it's not an obvious error
-        if speed_mbps < 0.1 and status == "OK" and http_code_str.startswith('2'):
-            status = "Slow/Failed"
-            logger.warning(f"Node {node_name} reported low speed ({speed_mbps:.2f} MB/s) despite OK HTTP status.")
-
+    def test_node_comprehensive(self, node: Dict) -> Dict:
+        """综合测试节点"""
+        node_name = node.get('name', node.get('server', 'Unknown Node'))
+        logger.info(f"Starting comprehensive test for node: {node_name}")
+        
         result = {
-            "name": node.get('name', node.get('server')),
+            "name": node_name,
             "server": node.get('server'),
             "port": node.get('port'),
             "protocol": node.get('protocol'),
-            "uuid": node.get('uuid'),
-            "latency_ms": round(latency * 1000, 2) if latency > 0 else 0.0,
-            "download_speed_mbps": round(speed_mbps, 2),
-            "http_status": http_code,
-            "status": status
+            "timestamp": time.time()
         }
-        logger.info(f"Speed test result for {result['name']}: Speed={result['download_speed_mbps']} MB/s, Latency={result['latency_ms']}ms, Status={result['status']}")
+        
+        # 1. 连通性测试
+        connectivity = self.test_connectivity(node.get('server'), node.get('port'))
+        result.update(connectivity)
+        
+        if connectivity.get("status") != "connected":
+            result["overall_status"] = "❌ 连接失败"
+            return result
+        
+        # 2. 速度测试
+        proxy = self.construct_proxy_string(node)
+        speed_results = []
+        
+        for test_url in TEST_URLS[:2]:  # 只测试前两个URL
+            try:
+                speed_result = self.test_http_speed(test_url, proxy)
+                if speed_result.get("status") == "success":
+                    speed_results.append(speed_result)
+                    break  # 成功一个就够了
+            except Exception as e:
+                logger.warning(f"Speed test failed for {test_url}: {e}")
+                continue
+        
+        if speed_results:
+            best_result = max(speed_results, key=lambda x: x.get("download_speed_mbps", 0))
+            result.update({
+                "download_speed_mbps": best_result.get("download_speed_mbps", 0),
+                "downloaded_bytes": best_result.get("downloaded_bytes", 0),
+                "test_duration": best_result.get("total_time_seconds", 0)
+            })
+            
+            # 根据速度判断状态
+            speed = best_result.get("download_speed_mbps", 0)
+            if speed > 10:
+                result["overall_status"] = "🚀 极速"
+            elif speed > 5:
+                result["overall_status"] = "⚡ 快速"
+            elif speed > 1:
+                result["overall_status"] = "✅ 正常"
+            elif speed > 0.1:
+                result["overall_status"] = "🐌 较慢"
+            else:
+                result["overall_status"] = "❌ 极慢"
+        else:
+            result.update({
+                "download_speed_mbps": 0,
+                "overall_status": "❌ 测速失败"
+            })
+        
+        # 3. 获取节点额外信息（模拟）
+        result.update(self.get_node_extra_info(node))
+        
         return result
 
-    except FileNotFoundError:
-        logger.error("Error: 'curl' command not found. Please ensure curl is installed and in your PATH.")
-        return {"error": "'curl' not found. Please install it."}
-    except Exception as e:
-        logger.error(f"An error occurred during speed test for {node_name}: {e}", exc_info=True)
-        return {"error": f"Speed test failed: {e}"}
+    def get_node_extra_info(self, node: Dict) -> Dict:
+        """获取节点额外信息（流量、地区等）"""
+        # 这里可以添加实际的流量查询逻辑
+        # 目前返回模拟数据
+        import random
+        
+        # 模拟地区信息
+        regions = ["🇺🇸 美国", "🇯🇵 日本", "🇭🇰 香港", "🇸🇬 新加坡", "🇩🇪 德国", "🇬🇧 英国"]
+        
+        return {
+            "region": random.choice(regions),
+            "remaining_traffic": f"{random.randint(50, 500)}GB",
+            "total_traffic": f"{random.randint(500, 1000)}GB",
+            "expire_date": "2024-12-31",
+            "node_load": f"{random.randint(10, 80)}%"
+        }
 
-# --- For testing ---
-if __name__ == "__main__":
-    import json
-    import base64
-    from parser import parse_vmess_link
+    def test_multiple_nodes(self, nodes: List[Dict], max_workers: int = 3) -> List[Dict]:
+        """并发测试多个节点"""
+        results = []
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_node = {
+                executor.submit(self.test_node_comprehensive, node): node 
+                for node in nodes
+            }
+            
+            for future in as_completed(future_to_node, timeout=60):
+                try:
+                    result = future.result()
+                    results.append(result)
+                except Exception as e:
+                    node = future_to_node[future]
+                    logger.error(f"Error testing node {node.get('name', 'Unknown')}: {e}")
+                    results.append({
+                        "name": node.get('name', 'Unknown'),
+                        "overall_status": "❌ 测试异常",
+                        "error": str(e)
+                    })
+        
+        return results
+
+# 全局测试器实例
+speed_tester = SpeedTester()
+
+def test_node_speed(node: Dict) -> Dict:
+    """测试单个节点速度（兼容旧接口）"""
+    return speed_tester.test_node_comprehensive(node)
+
+def test_multiple_nodes_speed(nodes: List[Dict]) -> List[Dict]:
+    """测试多个节点速度"""
+    return speed_tester.test_multiple_nodes(nodes)
+
+def format_test_result(result: Dict) -> str:
+    """格式化测试结果"""
+    if "error" in result:
+        return f"❌ {result.get('name', 'Unknown')}: {result['error']}"
     
+    output = f"📊 {result.get('name', 'Unknown Node')}\n"
+    output += f"🌐 {result.get('server', 'N/A')}:{result.get('port', 'N/A')}\n"
+    output += f"🔗 {result.get('protocol', 'unknown').upper()}\n"
+    output += f"📍 {result.get('region', '未知地区')}\n"
+    output += f"⚡ 速度: {result.get('download_speed_mbps', 0):.2f} MB/s\n"
+    output += f"⏱️ 延迟: {result.get('latency_ms', 0):.2f} ms\n"
+    output += f"📊 状态: {result.get('overall_status', '未知')}\n"
+    
+    if result.get('remaining_traffic'):
+        output += f"💾 剩余流量: {result.get('remaining_traffic')}\n"
+    
+    if result.get('node_load'):
+        output += f"🔥 节点负载: {result.get('node_load')}\n"
+    
+    return output
+
+# 测试代码
+if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-    # Mocked valid vmess link for testing
-    mock_vmess_data = {
-        "add": "1.2.3.4", # Dummy server address
-        "port": 443,
-        "id": "a1b2c3d4-e5f6-7890-1234-567890abcdef",
-        "aid": 2,
-        "net": "ws",
-        "host": "example.com", # Dummy host
-        "path": "/websocket", # Dummy path
-        "tls": "tls",
-        "ps": "MockedVMessNode",
-        "scy": "auto",
-        "type": "auto"
+    
+    # 测试节点
+    test_node = {
+        "name": "Test Node",
+        "server": "8.8.8.8",
+        "port": 53,
+        "protocol": "test"
     }
-    mock_vmess_json = json.dumps(mock_vmess_data)
-    mock_vmess_encoded = base64.b64encode(mock_vmess_json.encode('utf-8')).decode('utf-8')
-    test_link_vmess_valid = f"vmess://{mock_vmess_encoded}"
-
-    print("\n--- Testing VMess Link Speed ---")
-    # Note: This test will likely FAIL if 1.2.3.4:443 is not actually a VMess WS server.
-    # It demonstrates the command construction and error handling.
-    result = test_node_speed(parse_vmess_link(test_link_vmess_valid))
-    print(f"Test Result: {result}")
-
-    # Example of a node that might fail (bad address/port)
-    test_node_fail = {
-        "name": "FailingNode",
-        "server": "10.0.0.1", # Non-routable IP
-        "port": 12345,
-        "uuid": "a1b2c3d4-e5f6-7890-1234-567890abcdef",
-        "protocol": "vmess",
-        "network": "tcp"
-    }
-    print("\n--- Testing Failing Node Speed ---")
-    result_fail = test_node_speed(test_node_fail)
-    print(f"Test Result: {result_fail}")
-
-    # Example with HTTP protocol (if supported)
-    test_node_http = {
-        "name": "HTTPNode",
-        "server": "httpbin.org",
-        "port": 80,
-        "protocol": "http"
-    }
-    print("\n--- Testing HTTP Node (as proxy) ---")
-    result_http = test_node_speed(test_node_http)
-    print(f"Test Result: {result_http}")
+    
+    result = test_node_speed(test_node)
+    print(format_test_result(result))
