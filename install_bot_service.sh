@@ -11,9 +11,11 @@ DECRYPT_SCRIPT="${BOT_INSTALL_DIR}/decrypt_secrets.sh"
 RUNNER_SCRIPT="${BOT_INSTALL_DIR}/secure_runner.sh"
 BOT_MAIN_SCRIPT="${BOT_INSTALL_DIR}/bot.py"
 BOT_VENV_PATH="${BOT_INSTALL_DIR}/venv/bin/activate"
-DECRYPT_SCRIPT_TEMPLATE="decrypt_secrets.sh" # Template script to be placed on server
+ENCRYPT_SCRIPT_LOCAL="encrypt_secrets.sh" # Script to be run locally to generate secrets.enc
+DECRYPT_SCRIPT_LOCAL="decrypt_secrets.sh" # Script to be placed on server for decryption
 RUNNER_TEMPLATE="secure_runner.sh.template"
 SERVICE_TEMPLATE="bot_service.service"
+# README.md is also part of the repo but not directly used by installer
 
 # --- Helper Functions ---
 log_info() { echo "[INFO] $1"; }
