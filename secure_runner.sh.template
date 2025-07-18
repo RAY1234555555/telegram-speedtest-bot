@@ -25,9 +25,9 @@ if [[ ! -f "$SECRETS_FILE" || ! -f "$DECRYPT_SCRIPT" ]]; then
   exit 1
 fi
 
-# Decrypt secrets.enc using the Master Password by piping it to the decrypt script.
+# Decrypt secrets.enc using the Master Password.
 # The decrypt script needs the Master Password as its first argument.
-DECRYPTED_DATA=$(echo "$MASTER_PASSWORD" | bash "$DECRYPT_SCRIPT" 2>/dev/null)
+DECRYPTED_DATA=$(bash "$DECRYPT_SCRIPT" "$MASTER_PASSWORD" 2>/dev/null)
 
 if [[ $? -ne 0 || -z "$DECRYPTED_DATA" ]]; then
   echo "Error: Failed to decrypt secrets. Incorrect Master Password or corrupted file. Exiting." >&2
