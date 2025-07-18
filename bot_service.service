@@ -1,0 +1,17 @@
+[Unit]
+Description=Telegram Speedtest Bot
+After=network.target
+
+[Service]
+User=debian_user                # <<< CHANGE THIS to your SSH username on the Debian server
+Group=debian_group              # <<< CHANGE THIS to your SSH user's group
+
+WorkingDirectory=/opt/telegram-speedtest-bot
+# ExecStart should point to the generated secure_runner.sh
+ExecStart=/opt/telegram-speedtest-bot/secure_runner.sh
+
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
