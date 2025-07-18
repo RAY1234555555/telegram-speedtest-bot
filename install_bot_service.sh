@@ -2,7 +2,7 @@
 # Installs and configures the Telegram Speedtest Bot service on Debian.
 
 # --- Configuration ---
-GITHUB_REPO_URL="https://github.com/your-username/telegram-speedtest-bot.git" # <<< REPLACE WITH YOUR GITHUB REPO URL
+GITHUB_REPO_URL="https://github.com/RAY1234555555/telegram-speedtest-bot.git" # <<< YOUR GITHUB REPO URL
 BOT_INSTALL_DIR="/opt/telegram-speedtest-bot"
 BOT_SERVICE_NAME="telegram-speedtest-bot.service"
 SYSTEMD_SERVICE_PATH="/etc/systemd/system/${BOT_SERVICE_NAME}"
@@ -78,7 +78,7 @@ CURRENT_GROUP=$(id -g -n)
 # --- Create directories ---
 log_info "Creating bot directories..."
 sudo_if_needed mkdir -p "$BOT_INSTALL_DIR"
-sudo_if_needed chown "${CURRENT_USER}:${CURRENT_GROUP}" "$BOT_INSTALL_DIR" # Ensure correct ownership
+sudo_if_needed chown "${CURRENT_USER}:${CURRENT_GROUP}" "$BOT_INSTALL_DIR" # Set ownership for current user
 sudo_if_needed mkdir -p "$(dirname "$DECRYPT_SCRIPT")" # For decrypt_secrets.sh
 sudo_if_needed chmod 700 "$(dirname "$DECRYPT_SCRIPT")" # Ensure directory is secure
 sudo_if_needed mkdir -p "$(dirname "$RUNNER_SCRIPT")"
@@ -116,7 +116,9 @@ log_info "Python environment setup complete."
 # --- Encrypt Secrets ---
 log_info "Encrypting secrets using Master Password..."
 # Use openssl to encrypt. The Master Password is provided directly.
-ENCRYPT_CMD="openssl enc -aes-256-cbc -pbkdf2 -iter 100000 -salt -out \"$SECRETS_FILE\" -pass pass:\"$MASTER_PASSWORD\""
+# We use a temporary file for data and export MASTER_PASSWORD as an environment variable for openssl.
+# This helps handle special characters in the Master Password more robustly.
+ENCRYPT_CMD="openssl enc -aes-256-cbc -pbkdf2 -iter 100000 -salt -out \"$SECRETS_FILE\" -pass env:MASTER_PASSWORD_VAR"
 
 # Prepare data for encryption
 echo -n "TELEGRAM_BOT_TOKEN=" > temp_secrets_data.txt
@@ -126,7 +128,8 @@ echo -n "ALLOWED_USER_IDS=" >> temp_secrets_data.txt
 echo -n "$ALLOWED_USER_IDS" >> temp_secrets_data.txt
 echo "" >> temp_secrets_data.txt
 
-# Execute encryption.
+# Execute encryption. Export MASTER_PASSWORD to an env var for openssl.
+export MASTER_PASSWORD_VAR="$MASTER_PASSWORD"
 eval $ENCRYPT_CMD temp_secrets_data.txt
 if [ $? -ne 0 ]; then
     log_error "openssl encryption failed. Ensure openssl is installed and Master Password is valid."
@@ -155,6 +158,7 @@ if [[ -z "\$MASTER_PASSWORD_FROM_RUNNER" || ! -f "\$SECRET_FILE" ]]; then
 fi
 
 # Use openssl to decrypt. Pass password via stdin.
+# Ensure encryption parameters match those used in encrypt_secrets.sh
 DECRYPTED_DATA=\$(echo "\$MASTER_PASSWORD_FROM_RUNNER" | openssl enc -d -aes-256-cbc -pbkdf2 -iter 100000 -salt -pass stdin -in "\$SECRET_FILE")
 
 if [[ \$? -ne 0 || -z "\$DECRYPTED_DATA" ]]; then
@@ -200,7 +204,7 @@ fi
 
 # Decrypt secrets.enc using the Master Password by piping it to the decrypt script.
 # The decrypt script needs the Master Password as its first argument.
-DECRYPTED_DATA=\$(echo "\$MASTER_PASSWORD" | bash "\$DECRYPT_SCRIPT" 2>/dev/null)
+DECRYPTED_DATA=\$(bash "\$DECRYPT_SCRIPT" "\$MASTER_PASSWORD" 2>/dev/null)
 
 if [[ \$? -ne 0 || -z "\$DECRYPTED_DATA" ]]; then
   echo "Error: Failed to decrypt secrets. Incorrect Master Password or corrupted file. Exiting." >&2
