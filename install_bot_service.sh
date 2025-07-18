@@ -11,11 +11,9 @@ DECRYPT_SCRIPT="${BOT_INSTALL_DIR}/decrypt_secrets.sh"
 RUNNER_SCRIPT="${BOT_INSTALL_DIR}/secure_runner.sh"
 BOT_MAIN_SCRIPT="${BOT_INSTALL_DIR}/bot.py"
 BOT_VENV_PATH="${BOT_INSTALL_DIR}/venv/bin/activate"
-ENCRYPT_SCRIPT_LOCAL="encrypt_secrets.sh" # Script to be run locally to generate secrets.enc
-DECRYPT_SCRIPT_LOCAL="decrypt_secrets.sh" # Script to be placed on server for decryption
+DECRYPT_SCRIPT_TEMPLATE="decrypt_secrets.sh" # Template script to be placed on server
 RUNNER_TEMPLATE="secure_runner.sh.template"
 SERVICE_TEMPLATE="bot_service.service"
-# README.md is also part of the repo but not directly used by installer
 
 # --- Helper Functions ---
 log_info() { echo "[INFO] $1"; }
@@ -78,9 +76,9 @@ CURRENT_GROUP=$(id -g -n)
 # --- Create directories ---
 log_info "Creating bot directories..."
 sudo_if_needed mkdir -p "$BOT_INSTALL_DIR"
-sudo_if_needed chown "${CURRENT_USER}:${CURRENT_GROUP}" "$BOT_INSTALL_DIR" # Set ownership for current user
-sudo_if_needed mkdir -p "$(dirname "$DECRYPT_SCRIPT")" # For decrypt_secrets.sh
-sudo_if_needed chmod 700 "$(dirname "$DECRYPT_SCRIPT")" # Ensure directory is secure
+sudo_if_needed chown "${CURRENT_USER}:${CURRENT_GROUP}" "$BOT_INSTALL_DIR"
+sudo_if_needed mkdir -p "$(dirname "$DECRYPT_SCRIPT")"
+sudo_if_needed chmod 700 "$(dirname "$DECRYPT_SCRIPT")"
 sudo_if_needed mkdir -p "$(dirname "$RUNNER_SCRIPT")"
 sudo_if_needed chmod 700 "$(dirname "$RUNNER_SCRIPT")"
 
@@ -116,8 +114,8 @@ log_info "Python environment setup complete."
 # --- Encrypt Secrets ---
 log_info "Encrypting secrets using Master Password..."
 # Use openssl to encrypt. The Master Password is provided directly.
-# We use a temporary file for data and export MASTER_PASSWORD as an environment variable for openssl.
-# This helps handle special characters in the Master Password more robustly.
+# We export MASTER_PASSWORD as an environment variable for openssl's -pass env: option.
+# This handles special characters in the Master Password correctly.
 ENCRYPT_CMD="openssl enc -aes-256-cbc -pbkdf2 -iter 100000 -salt -out \"$SECRETS_FILE\" -pass env:MASTER_PASSWORD_VAR"
 
 # Prepare data for encryption
@@ -144,9 +142,8 @@ log_info "Secrets encrypted successfully to $SECRETS_FILE (permissions 600)."
 log_info "Generating decrypt_secrets.sh..."
 DECRYPT_SCRIPT_CONTENT=$(cat <<EOF
 #!/bin/bash
-# Decrypts secrets.enc using a Master Password provided via stdin.
-# CRITICAL: Master Password is provided via stdin from secure_runner.sh.
-# Ensure this script has 700 permissions.
+# Decrypts secrets.enc using a Master Password provided as the first argument.
+# CRITICAL: Ensure this script has 700 permissions.
 
 MASTER_PASSWORD_FROM_RUNNER="\$1" # Passed as the first argument from runner
 
@@ -158,7 +155,7 @@ if [[ -z "\$MASTER_PASSWORD_FROM_RUNNER" || ! -f "\$SECRET_FILE" ]]; then
 fi
 
 # Use openssl to decrypt. Pass password via stdin.
-# Ensure encryption parameters match those used in encrypt_secrets.sh
+# Ensure encryption parameters match those used in install_bot_service.sh
 DECRYPTED_DATA=\$(echo "\$MASTER_PASSWORD_FROM_RUNNER" | openssl enc -d -aes-256-cbc -pbkdf2 -iter 100000 -salt -pass stdin -in "\$SECRET_FILE")
 
 if [[ \$? -ne 0 || -z "\$DECRYPTED_DATA" ]]; then
@@ -202,8 +199,7 @@ if [[ ! -f "\$SECRETS_FILE" || ! -f "\$DECRYPT_SCRIPT" ]]; then
   exit 1
 fi
 
-# Decrypt secrets.enc using the Master Password by piping it to the decrypt script.
-# The decrypt script needs the Master Password as its first argument.
+# Decrypt secrets.enc using the Master Password by passing it as an argument to decrypt_secrets.sh
 DECRYPTED_DATA=\$(bash "\$DECRYPT_SCRIPT" "\$MASTER_PASSWORD" 2>/dev/null)
 
 if [[ \$? -ne 0 || -z "\$DECRYPTED_DATA" ]]; then
