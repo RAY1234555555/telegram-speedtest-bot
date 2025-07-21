@@ -219,38 +219,61 @@ echo -e "${YELLOW}请按照提示输入配置信息：${NC}"
 echo ""
 
 # Bot Token
-while true; do
-    echo -e "${BLUE}步骤 1/4:${NC} 获取 Telegram Bot Token"
-    echo "   1. 打开 Telegram，搜索 @BotFather"
-    echo "   2. 发送 /newbot 创建新机器人"
-    echo "   3. 按提示设置机器人名称"
-    echo "   4. 复制获得的 Token"
-    echo ""
-    safe_read "请输入 Bot Token" BOT_TOKEN false
+echo -e "${BLUE}步骤 1/4:${NC} 获取 Telegram Bot Token"
+echo "   1. 打开 Telegram，搜索 @BotFather"
+echo "   2. 发送 /newbot 创建新机器人"
+echo "   3. 按提示设置机器人名称"
+echo "   4. 复制获得的 Token"
+echo "   格式示例: 123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
+echo ""
+
+BOT_TOKEN=""
+while [[ -z "$BOT_TOKEN" ]]; do
+    read -p "请输入 Bot Token: " BOT_TOKEN
     
-    if [[ -n "$BOT_TOKEN" && "$BOT_TOKEN" =~ ^[0-9]+:[a-zA-Z0-9_-]+$ ]]; then
-        break
+    # 基础检查：不为空且包含冒号
+    if [[ -n "$BOT_TOKEN" && "$BOT_TOKEN" == *":"* ]]; then
+        # 检查基本格式：数字:字母数字组合
+        if [[ "$BOT_TOKEN" =~ ^[0-9]+:[a-zA-Z0-9_-]{35}$ ]]; then
+            echo -e "${GREEN}✅ Token 格式正确${NC}"
+            break
+        else
+            echo -e "${YELLOW}⚠️  Token 格式可能不标准，但继续使用${NC}"
+            echo "如果机器人无法工作，请检查Token是否正确"
+            break
+        fi
     else
-        echo -e "${RED}❌ Token 格式不正确，请重新输入${NC}"
-        echo ""
+        echo -e "${RED}❌ Token 不能为空且必须包含冒号，请重新输入${NC}"
+        BOT_TOKEN=""
     fi
 done
 
 # 用户ID
-while true; do
-    echo ""
-    echo -e "${BLUE}步骤 2/4:${NC} 获取您的 Telegram 用户ID"
-    echo "   1. 打开 Telegram，搜索 @userinfobot"
-    echo "   2. 发送任意消息获取您的用户ID"
-    echo "   3. 多个用户请用逗号分隔，如: 123456789,987654321"
-    echo ""
-    safe_read "请输入授权用户ID" ALLOWED_USER_IDS false
+echo ""
+echo -e "${BLUE}步骤 2/4:${NC} 获取您的 Telegram 用户ID"
+echo "   1. 打开 Telegram，搜索 @userinfobot"
+echo "   2. 发送任意消息获取您的用户ID"
+echo "   3. 多个用户请用逗号分隔，如: 123456789,987654321"
+echo ""
+
+ALLOWED_USER_IDS=""
+while [[ -z "$ALLOWED_USER_IDS" ]]; do
+    read -p "请输入授权用户ID: " ALLOWED_USER_IDS
     
-    if [[ -n "$ALLOWED_USER_IDS" && "$ALLOWED_USER_IDS" =~ ^[0-9,]+$ ]]; then
-        break
+    if [[ -n "$ALLOWED_USER_IDS" ]]; then
+        # 移除空格
+        ALLOWED_USER_IDS=$(echo "$ALLOWED_USER_IDS" | tr -d ' ')
+        
+        # 检查格式：只包含数字和逗号
+        if [[ "$ALLOWED_USER_IDS" =~ ^[0-9,]+$ ]]; then
+            echo -e "${GREEN}✅ 用户ID格式正确${NC}"
+            break
+        else
+            echo -e "${RED}❌ 用户ID只能包含数字和逗号，请重新输入${NC}"
+            ALLOWED_USER_IDS=""
+        fi
     else
-        echo -e "${RED}❌ 用户ID格式不正确，请重新输入${NC}"
-        echo ""
+        echo -e "${RED}❌ 用户ID不能为空，请重新输入${NC}"
     fi
 done
 
@@ -263,21 +286,34 @@ echo ""
 read -p "API地址 (回车使用默认): " TELEGRAM_API_URL
 
 # 主密码
-while true; do
+echo ""
+echo -e "${BLUE}步骤 4/4:${NC} 设置主密码"
+echo "   用于加密存储敏感配置信息"
+echo "   请设置一个安全的密码（至少6位）"
+echo ""
+
+MASTER_PASSWORD=""
+MASTER_PASSWORD_CONFIRM=""
+while [[ -z "$MASTER_PASSWORD" ]]; do
+    read -sp "请输入主密码: " MASTER_PASSWORD
     echo ""
-    echo -e "${BLUE}步骤 4/4:${NC} 设置主密码"
-    echo "   用于加密存储敏感配置信息"
-    echo "   请设置一个安全的密码"
-    echo ""
-    safe_read "请输入主密码" MASTER_PASSWORD true
-    echo ""
-    safe_read "请再次确认密码" MASTER_PASSWORD_CONFIRM true
     
-    if [[ -n "$MASTER_PASSWORD" && "$MASTER_PASSWORD" == "$MASTER_PASSWORD_CONFIRM" ]]; then
+    if [[ ${#MASTER_PASSWORD} -lt 6 ]]; then
+        echo -e "${RED}❌ 密码至少需要6位，请重新输入${NC}"
+        MASTER_PASSWORD=""
+        continue
+    fi
+    
+    read -sp "请再次确认密码: " MASTER_PASSWORD_CONFIRM
+    echo ""
+    
+    if [[ "$MASTER_PASSWORD" == "$MASTER_PASSWORD_CONFIRM" ]]; then
+        echo -e "${GREEN}✅ 密码设置成功${NC}"
         break
     else
-        echo -e "${RED}❌ 密码为空或两次输入不一致，请重新设置${NC}"
-        echo ""
+        echo -e "${RED}❌ 两次输入的密码不一致，请重新设置${NC}"
+        MASTER_PASSWORD=""
+        MASTER_PASSWORD_CONFIRM=""
     fi
 done
 
