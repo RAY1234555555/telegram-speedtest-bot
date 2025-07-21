@@ -506,61 +506,6 @@ class SpeedTester:
         
         return result
 
-# --- Management Commands ---
-class BotManager:
-    @staticmethod
-    def get_service_status() -> str:
-        """获取服务状态"""
-        try:
-            result = subprocess.run(['systemctl', 'is-active', 'telegram-speedtest-bot'], 
-                                  capture_output=True, text=True)
-            return result.stdout.strip()
-        except:
-            return "unknown"
-    
-    @staticmethod
-    def restart_service() -> bool:
-        """重启服务"""
-        try:
-            subprocess.run(['sudo', 'systemctl', 'restart', 'telegram-speedtest-bot'], 
-                          check=True)
-            return True
-        except:
-            return False
-    
-    @staticmethod
-    def stop_service() -> bool:
-        """停止服务"""
-        try:
-            subprocess.run(['sudo', 'systemctl', 'stop', 'telegram-speedtest-bot'], 
-                          check=True)
-            return True
-        except:
-            return False
-    
-    @staticmethod
-    def get_logs() -> str:
-        """获取日志"""
-        try:
-            result = subprocess.run(['sudo', 'journalctl', '-u', 'telegram-speedtest-bot', 
-                                   '--no-pager', '-n', '20'], 
-                                  capture_output=True, text=True)
-            return result.stdout
-        except:
-            return "无法获取日志"
-    
-    @staticmethod
-    def update_project() -> bool:
-        """更新项目"""
-        try:
-            os.chdir('/opt/telegram-speedtest-bot')
-            subprocess.run(['git', 'pull'], check=True)
-            subprocess.run(['sudo', 'systemctl', 'restart', 'telegram-speedtest-bot'], 
-                          check=True)
-            return True
-        except:
-            return False
-
 # --- Bot Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """启动命令"""
@@ -583,8 +528,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 • 发送订阅链接获取分析
 • 发送多个节点进行批量测试
 
-🔧 **管理命令：**
-• 发送 `ikunss` 进入管理菜单
+🔧 **VPS管理：**
+• 在VPS中输入 `ikunss` 进入管理菜单
 
 现在就发送节点链接开始测速吧！"""
         
@@ -592,110 +537,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         
     except Exception as e:
         logger.error(f"start 命令处理失败: {e}")
-
-async def ikunss_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """管理命令"""
-    try:
-        user_id = update.effective_user.id
-        if not is_authorized(user_id):
-            await update.message.reply_text("❌ 抱歉，您没有使用此机器人的权限。")
-            return
-
-        keyboard = [
-            [InlineKeyboardButton("🔄 重启服务", callback_data="mgmt_restart")],
-            [InlineKeyboardButton("⏹️ 停止服务", callback_data="mgmt_stop")],
-            [InlineKeyboardButton("🔄 更新项目", callback_data="mgmt_update")],
-            [InlineKeyboardButton("📊 当前状态", callback_data="mgmt_status")],
-            [InlineKeyboardButton("📋 查看日志", callback_data="mgmt_logs")],
-            [InlineKeyboardButton("🗑️ 卸载服务", callback_data="mgmt_uninstall")],
-            [InlineKeyboardButton("❌ 退出", callback_data="mgmt_exit")]
-        ]
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await update.message.reply_text(
-            "🛠️ **IKUN测速机器人管理面板**\n\n请选择要执行的操作：",
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
-        
-    except Exception as e:
-        logger.error(f"ikunss 命令处理失败: {e}")
-
-async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """处理回调查询"""
-    try:
-        query = update.callback_query
-        await query.answer()
-        
-        data = query.data
-        
-        if data.startswith("mgmt_"):
-            if data == "mgmt_restart":
-                await query.edit_message_text("🔄 正在重启服务...")
-                success = BotManager.restart_service()
-                if success:
-                    await query.edit_message_text("✅ 服务重启成功！")
-                else:
-                    await query.edit_message_text("❌ 服务重启失败！")
-            
-            elif data == "mgmt_stop":
-                await query.edit_message_text("⏹️ 正在停止服务...")
-                success = BotManager.stop_service()
-                if success:
-                    await query.edit_message_text("✅ 服务已停止！")
-                else:
-                    await query.edit_message_text("❌ 服务停止失败！")
-            
-            elif data == "mgmt_update":
-                await query.edit_message_text("🔄 正在更新项目...")
-                success = BotManager.update_project()
-                if success:
-                    await query.edit_message_text("✅ 项目更新成功！服务已重启。")
-                else:
-                    await query.edit_message_text("❌ 项目更新失败！")
-            
-            elif data == "mgmt_status":
-                status = BotManager.get_service_status()
-                status_text = f"📊 **服务状态**\n\n"
-                status_text += f"状态: {status}\n"
-                status_text += f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                await query.edit_message_text(status_text, parse_mode='Markdown')
-            
-            elif data == "mgmt_logs":
-                await query.edit_message_text("📋 正在获取日志...")
-                logs = BotManager.get_logs()
-                if len(logs) > 4000:
-                    logs = logs[-4000:]
-                await query.edit_message_text(f"📋 **最近日志**\n\n```\n{logs}\n```", parse_mode='Markdown')
-            
-            elif data == "mgmt_uninstall":
-                await query.edit_message_text(
-                    "⚠️ **确认卸载**\n\n这将完全删除服务和所有文件！\n\n确定要继续吗？",
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("✅ 确认卸载", callback_data="mgmt_uninstall_confirm")],
-                        [InlineKeyboardButton("❌ 取消", callback_data="mgmt_exit")]
-                    ]),
-                    parse_mode='Markdown'
-                )
-            
-            elif data == "mgmt_uninstall_confirm":
-                await query.edit_message_text("🗑️ 正在卸载服务...")
-                try:
-                    subprocess.run(['sudo', 'systemctl', 'stop', 'telegram-speedtest-bot'], check=True)
-                    subprocess.run(['sudo', 'systemctl', 'disable', 'telegram-speedtest-bot'], check=True)
-                    subprocess.run(['sudo', 'rm', '/etc/systemd/system/telegram-speedtest-bot.service'], check=True)
-                    subprocess.run(['sudo', 'rm', '-rf', '/opt/telegram-speedtest-bot'], check=True)
-                    subprocess.run(['sudo', 'systemctl', 'daemon-reload'], check=True)
-                    await query.edit_message_text("✅ 服务已完全卸载！")
-                except:
-                    await query.edit_message_text("❌ 卸载过程中出现错误！")
-            
-            elif data == "mgmt_exit":
-                await query.edit_message_text("👋 已退出管理面板")
-                
-    except Exception as e:
-        logger.error(f"回调查询处理失败: {e}")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """处理普通消息"""
@@ -707,11 +548,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
         text = update.message.text
         if not text:
-            return
-
-        # 处理管理命令
-        if text.lower() == 'ikunss':
-            await ikunss_command(update, context)
             return
 
         # 发送处理中消息
@@ -747,8 +583,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                         result_text += f"💾 **剩余流量:** 500GB\n"
                 else:
                     result_text += f"📊 **状态:** {result.get('status_emoji')} {result.get('status_text')}\n"
-                
-                result_text += f"\n注意: 这是演示结果，实际功能正在开发中"
                 
                 await processing_message.edit_text(result_text, parse_mode='Markdown')
                 
@@ -825,7 +659,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     "**支持的格式：**\n"
                     "• 单个节点链接 (vmess://, vless://, ss://, hy2://, trojan://)\n"
                     "• 订阅链接 (http/https)\n"
-                    "• 发送 `ikunss` 进入管理菜单\n\n"
+                    "• 在VPS中输入 `ikunss` 进入管理菜单\n\n"
                     "💡 **提示：** 直接粘贴节点链接或订阅地址即可",
                     parse_mode='Markdown'
                 )
@@ -856,8 +690,6 @@ def main() -> None:
         
         # 注册命令处理器
         application.add_handler(CommandHandler("start", start))
-        application.add_handler(CommandHandler("ikunss", ikunss_command))
-        application.add_handler(CallbackQueryHandler(handle_callback_query))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
         logger.info("✅ 处理器注册完成")
