@@ -346,7 +346,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 • 平均每用户: {round(total_tests/total_users, 1) if total_users > 0 else 0} 次测速
 
 🏆 **功能使用:**
-• 真实速度���试 ✅
+• 真实速度测试 ✅
 • 地理位置检测 ✅
 • ISP信息查询 ✅
 • 质量评分系统 ✅
