@@ -1,5 +1,5 @@
 #!/bin/bash
-# 安装真正可用的IKUN测速机器人
+# 安装真正可用的IKUN测速机器人 - 修复版
 
 # --- 颜色定义 ---
 RED='\033[0;31m'
@@ -17,6 +17,7 @@ DECRYPT_SCRIPT="${BOT_INSTALL_DIR}/decrypt_secrets.sh"
 RUNNER_SCRIPT="${BOT_INSTALL_DIR}/secure_runner.sh"
 BOT_MAIN_SCRIPT="${BOT_INSTALL_DIR}/working_bot.py"
 BOT_VENV_PATH="${BOT_INSTALL_DIR}/venv/bin/activate"
+IKUNSS_SCRIPT="${BOT_INSTALL_DIR}/ikunss"
 
 # --- 辅助函数 ---
 log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
@@ -49,7 +50,7 @@ safe_read() {
 log_info "🔍 检查系统环境..."
 for cmd in python3 pip3 openssl systemctl curl; do
     if ! command -v $cmd >/dev/null 2>&1; then
-        log_error "'$cmd' 未安装。请先安装: sudo apt update && sudo apt install $cmd"
+        log_error "'$cmd' 未安装。请先安装: sudo apt update && sudo apt install $cmd python3-venv"
         exit 1
     fi
 done
@@ -191,6 +192,280 @@ EOF
 
 chmod 700 "$RUNNER_SCRIPT"
 
+# --- 创建ikunss管理脚本 ---
+log_info "🔧 创建管理脚本..."
+cat > "$IKUNSS_SCRIPT" << 'EOF'
+#!/bin/bash
+# IKUN测速机器人管理脚本
+
+# --- 颜色定义 ---
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+# --- 配置 ---
+SERVICE_NAME="telegram-speedtest-bot"
+INSTALL_DIR="/opt/telegram-speedtest-bot"
+LOG_LINES=50
+
+# --- 辅助函数 ---
+print_header() {
+    clear
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║                    IKUN测速机器人管理面板                      ║${NC}"
+    echo -e "${CYAN}║                        v1.0.0                                ║${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+}
+
+print_status() {
+    local status=$(systemctl is-active $SERVICE_NAME 2>/dev/null || echo "inactive")
+    local enabled=$(systemctl is-enabled $SERVICE_NAME 2>/dev/null || echo "disabled")
+    
+    echo -e "${BLUE}📊 当前状态:${NC}"
+    if [ "$status" = "active" ]; then
+        echo -e "   服务状态: ${GREEN}●${NC} 运行中 (active)"
+    else
+        echo -e "   服务状态: ${RED}●${NC} 已停止 ($status)"
+    fi
+    
+    if [ "$enabled" = "enabled" ]; then
+        echo -e "   开机启动: ${GREEN}✓${NC} 已启用"
+    else
+        echo -e "   开机启动: ${RED}✗${NC} 已禁用"
+    fi
+    
+    echo -e "   当前时间: $(date '+%Y-%m-%d %H:%M:%S')"
+    echo ""
+}
+
+show_menu() {
+    echo -e "${YELLOW}请选择操作:${NC}"
+    echo ""
+    echo -e "  ${GREEN}1.${NC} 🔄 重启服务"
+    echo -e "  ${GREEN}2.${NC} ⏹️  停止服务"
+    echo -e "  ${GREEN}3.${NC} 🔄 更新项目"
+    echo -e "  ${GREEN}4.${NC} 📊 当前状态"
+    echo -e "  ${GREEN}5.${NC} 📋 查看日志"
+    echo -e "  ${GREEN}6.${NC} 🗑️  卸载服务"
+    echo -e "  ${GREEN}7.${NC} ❌ 退出"
+    echo ""
+    echo -ne "${CYAN}请输入选项 [1-7]: ${NC}"
+}
+
+restart_service() {
+    echo -e "${BLUE}🔄 正在重启服务...${NC}"
+    if sudo systemctl restart $SERVICE_NAME; then
+        echo -e "${GREEN}✅ 服务重启成功！${NC}"
+        sleep 2
+        if systemctl is-active --quiet $SERVICE_NAME; then
+            echo -e "${GREEN}✅ 服务运行正常${NC}"
+        else
+            echo -e "${RED}❌ 服务启动异常，请查看日志${NC}"
+        fi
+    else
+        echo -e "${RED}❌ 服务重启失败！${NC}"
+    fi
+    echo ""
+    read -p "按回车键继续..."
+}
+
+stop_service() {
+    echo -e "${BLUE}⏹️ 正在停止服务...${NC}"
+    if sudo systemctl stop $SERVICE_NAME; then
+        echo -e "${GREEN}✅ 服务已停止！${NC}"
+    else
+        echo -e "${RED}❌ 服务停止失败！${NC}"
+    fi
+    echo ""
+    read -p "按回车键继续..."
+}
+
+update_project() {
+    echo -e "${BLUE}🔄 正在更新项目...${NC}"
+    
+    if [ ! -d "$INSTALL_DIR" ]; then
+        echo -e "${RED}❌ 项目目录不存在: $INSTALL_DIR${NC}"
+        read -p "按回车键继续..."
+        return
+    fi
+    
+    cd "$INSTALL_DIR" || {
+        echo -e "${RED}❌ 无法进入项目目录${NC}"
+        read -p "按回车键继续..."
+        return
+    }
+    
+    echo -e "${BLUE}🔄 重启服务...${NC}"
+    if sudo systemctl restart $SERVICE_NAME; then
+        echo -e "${GREEN}✅ 项目更新完成！服务已重启。${NC}"
+        sleep 2
+        if systemctl is-active --quiet $SERVICE_NAME; then
+            echo -e "${GREEN}✅ 服务运行正常${NC}"
+        else
+            echo -e "${RED}❌ 服务启动异常，请查看日志${NC}"
+        fi
+    else
+        echo -e "${RED}❌ 服务重启失败！${NC}"
+    fi
+    echo ""
+    read -p "按回车键继续..."
+}
+
+show_status() {
+    echo -e "${BLUE}📊 详细状态信息:${NC}"
+    echo ""
+    
+    # 服务状态
+    echo -e "${CYAN}=== 服务状态 ===${NC}"
+    sudo systemctl status $SERVICE_NAME --no-pager -l || echo -e "${RED}服务不存在${NC}"
+    echo ""
+    
+    # 系统资源
+    echo -e "${CYAN}=== 系统资源 ===${NC}"
+    echo -e "CPU使用率: $(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1)%"
+    echo -e "内存使用: $(free -h | awk 'NR==2{printf "%.1f%%", $3*100/$2}')"
+    echo -e "磁盘使用: $(df -h / | awk 'NR==2{print $5}')"
+    echo ""
+    
+    # 网络连接
+    echo -e "${CYAN}=== 网络连接 ===${NC}"
+    if ping -c 1 8.8.8.8 >/dev/null 2>&1; then
+        echo -e "网络连接: ${GREEN}✅ 正常${NC}"
+    else
+        echo -e "网络连接: ${RED}❌ 异常${NC}"
+    fi
+    echo ""
+    
+    read -p "按回车键继续..."
+}
+
+show_logs() {
+    echo -e "${BLUE}📋 查看服务日志 (最近${LOG_LINES}行):${NC}"
+    echo ""
+    echo -e "${CYAN}=== 实时日志 ===${NC}"
+    
+    if systemctl list-units --full -all | grep -Fq "$SERVICE_NAME.service"; then
+        echo -e "${YELLOW}按 Ctrl+C 退出日志查看${NC}"
+        echo ""
+        sudo journalctl -u $SERVICE_NAME -f --no-pager -n $LOG_LINES
+    else
+        echo -e "${RED}❌ 服务不存在或未安装${NC}"
+        echo ""
+        read -p "按回车键继续..."
+    fi
+}
+
+uninstall_service() {
+    echo -e "${RED}⚠️  警告: 这将完全删除IKUN测速机器人服务和所有相关文件！${NC}"
+    echo ""
+    echo -e "${YELLOW}此操作包括:${NC}"
+    echo -e "  • 停止并删除systemd服务"
+    echo -e "  • 删除所有程序文件 ($INSTALL_DIR)"
+    echo -e "  • 删除配置和日志"
+    echo -e "  • 删除ikunss命令"
+    echo ""
+    
+    read -p "确定要继续吗？输入 'YES' 确认卸载: " confirm
+    
+    if [ "$confirm" = "YES" ]; then
+        echo -e "${BLUE}🗑️ 开始卸载...${NC}"
+        
+        # 停止服务
+        echo -e "${BLUE}⏹️ 停止服务...${NC}"
+        sudo systemctl stop $SERVICE_NAME 2>/dev/null || true
+        
+        # 禁用服务
+        echo -e "${BLUE}🚫 禁用服务...${NC}"
+        sudo systemctl disable $SERVICE_NAME 2>/dev/null || true
+        
+        # 删除服务文件
+        echo -e "${BLUE}🗑️ 删除服务文件...${NC}"
+        sudo rm -f /etc/systemd/system/$SERVICE_NAME.service
+        
+        # 重新加载systemd
+        echo -e "${BLUE}🔄 重新加载systemd...${NC}"
+        sudo systemctl daemon-reload
+        
+        # 删除程序目录
+        echo -e "${BLUE}🗑️ 删除程序文件...${NC}"
+        sudo rm -rf "$INSTALL_DIR"
+        
+        # 删除命令链接
+        echo -e "${BLUE}🗑️ 删除命令链接...${NC}"
+        sudo rm -f /usr/local/bin/ikunss
+        
+        echo -e "${GREEN}✅ IKUN测速机器人已完全卸载！${NC}"
+        echo -e "${YELLOW}感谢使用！${NC}"
+        echo ""
+        exit 0
+    else
+        echo -e "${YELLOW}❌ 卸载已取消${NC}"
+        echo ""
+        read -p "按回车键继续..."
+    fi
+}
+
+# --- 主程序 ---
+main() {
+    while true; do
+        print_header
+        print_status
+        show_menu
+        
+        read -r choice
+        echo ""
+        
+        case $choice in
+            1)
+                restart_service
+                ;;
+            2)
+                stop_service
+                ;;
+            3)
+                update_project
+                ;;
+            4)
+                show_status
+                ;;
+            5)
+                show_logs
+                ;;
+            6)
+                uninstall_service
+                ;;
+            7)
+                echo -e "${GREEN}👋 再见！${NC}"
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}❌ 无效选项，请重新选择${NC}"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+# 检查是否以root权限运行某些操作
+check_permissions() {
+    if ! sudo -n true 2>/dev/null; then
+        echo -e "${YELLOW}⚠️  某些操作需要sudo权限${NC}"
+        echo ""
+    fi
+}
+
+# 启动主程序
+check_permissions
+main
+EOF
+
+chmod +x "$IKUNSS_SCRIPT"
+
 # --- 创建系统服务 ---
 log_info "⚙️ 配置系统服务..."
 cat > "$SYSTEMD_SERVICE_PATH" << EOF
@@ -221,7 +496,7 @@ sudo_if_needed chmod 644 "$SYSTEMD_SERVICE_PATH"
 
 # --- 安装管理命令 ---
 log_info "🔧 安装管理命令..."
-sudo_if_needed cp ikunss /usr/local/bin/ikunss
+sudo_if_needed cp "$IKUNSS_SCRIPT" /usr/local/bin/ikunss
 sudo_if_needed chmod +x /usr/local/bin/ikunss
 
 # --- 启动服务 ---
@@ -253,13 +528,14 @@ FIRST_USER_ID=$(echo "$ALLOWED_USER_IDS" | cut -d',' -f1)
 TEST_MESSAGE="🎉 IKUN测速机器人安装成功！
 
 ✅ 服务运行正常
-🚀 支持真实节点测速
-📊 支持订阅分析
+🚀 支持真实节点测速和解析
+📊 修复了所有已知问题
 
 发送节点链接开始测速
 在VPS中输入 ikunss 进入管理菜单
 
-安装时间: $(date)"
+安装时间: $(date)
+版本: v1.0.1 (修复版)"
 
 curl -s -X POST "$TELEGRAM_API_URL/bot$BOT_TOKEN/sendMessage" \
     -d "chat_id=$FIRST_USER_ID" \
@@ -287,7 +563,6 @@ echo ""
 echo "🤖 机器人命令:"
 echo "   发送 /start 开始使用"
 echo "   直接发送节点链接进行测速"
-echo "   发送订阅链接进行分析"
 echo ""
 echo "🚀 现在可以开始使用机器人了！"
 echo "💡 在VPS中输入 'ikunss' 进入管理菜单"
