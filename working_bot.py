@@ -79,7 +79,14 @@ class NodeParser:
     def parse_vmess(link: str) -> Optional[Dict]:
         """解析VMess节点"""
         try:
+            if not link or not link.startswith("vmess://"):
+                return None
+                
             encoded_data = link[8:].strip()
+            if not encoded_data:
+                return None
+                
+            # 添加填充以确保正确的base64解码
             missing_padding = len(encoded_data) % 4
             if missing_padding:
                 encoded_data += '=' * (4 - missing_padding)
@@ -87,17 +94,26 @@ class NodeParser:
             decoded_data = base64.b64decode(encoded_data).decode('utf-8')
             node_info = json.loads(decoded_data)
             
+            # 安全获取字段，避免None错误
+            server = node_info.get("add", "")
+            port = node_info.get("port", 443)
+            uuid = node_info.get("id", "")
+            
+            if not server or not uuid:
+                logger.warning("VMess节点缺少必要字段")
+                return None
+            
             return {
                 "protocol": "VMess",
-                "name": node_info.get("ps", "VMess Node"),
-                "server": node_info.get("add"),
-                "port": int(node_info.get("port", 443)),
-                "uuid": node_info.get("id"),
-                "alterId": int(node_info.get("aid", 0)),
-                "network": node_info.get("net", "tcp"),
-                "tls": node_info.get("tls", ""),
-                "host": node_info.get("host", ""),
-                "path": node_info.get("path", "")
+                "name": node_info.get("ps", "VMess Node") or "VMess Node",
+                "server": server,
+                "port": int(port) if str(port).isdigit() else 443,
+                "uuid": uuid,
+                "alterId": int(node_info.get("aid", 0)) if str(node_info.get("aid", 0)).isdigit() else 0,
+                "network": node_info.get("net", "tcp") or "tcp",
+                "tls": node_info.get("tls", "") or "",
+                "host": node_info.get("host", "") or "",
+                "path": node_info.get("path", "") or ""
             }
         except Exception as e:
             logger.error(f"VMess解析失败: {e}")
@@ -107,8 +123,14 @@ class NodeParser:
     def parse_vless(link: str) -> Optional[Dict]:
         """解析VLess节点"""
         try:
+            if not link or not link.startswith("vless://"):
+                return None
+                
             parsed = urlparse(link)
-            query = parse_qs(parsed.query)
+            if not parsed.hostname or not parsed.username:
+                return None
+                
+            query = parse_qs(parsed.query) if parsed.query else {}
             
             return {
                 "protocol": "VLess",
@@ -116,10 +138,10 @@ class NodeParser:
                 "server": parsed.hostname,
                 "port": parsed.port or 443,
                 "uuid": parsed.username,
-                "encryption": query.get("encryption", ["none"])[0],
-                "flow": query.get("flow", [""])[0],
-                "security": query.get("security", ["none"])[0],
-                "sni": query.get("sni", [""])[0]
+                "encryption": query.get("encryption", ["none"])[0] if query.get("encryption") else "none",
+                "flow": query.get("flow", [""])[0] if query.get("flow") else "",
+                "security": query.get("security", ["none"])[0] if query.get("security") else "none",
+                "sni": query.get("sni", [""])[0] if query.get("sni") else ""
             }
         except Exception as e:
             logger.error(f"VLess解析失败: {e}")
@@ -129,23 +151,45 @@ class NodeParser:
     def parse_shadowsocks(link: str) -> Optional[Dict]:
         """解析Shadowsocks节点"""
         try:
+            if not link or not link.startswith("ss://"):
+                return None
+                
             parsed = urlparse(link)
             
+            method = ""
+            password = ""
+            
             if parsed.username and parsed.password:
+                # 新格式: ss://method:password@server:port#name
                 method = parsed.username
                 password = parsed.password
             else:
-                # 处理旧格式
-                encoded_part = link[5:].split('@')[0] if '@' in link else link[5:].split('#')[0]
+                # 旧格式: ss://base64encoded@server:port#name 或 ss://base64encoded#name
+                if '@' in link:
+                    encoded_part = link[5:].split('@')[0]
+                else:
+                    encoded_part = link[5:].split('#')[0]
+                
+                if not encoded_part:
+                    return None
+                
+                # 添加填充
                 missing_padding = len(encoded_part) % 4
                 if missing_padding:
                     encoded_part += '=' * (4 - missing_padding)
                 
-                decoded = base64.b64decode(encoded_part).decode('utf-8')
-                if ':' in decoded:
-                    method, password = decoded.split(':', 1)
-                else:
-                    method, password = "aes-256-gcm", decoded
+                try:
+                    decoded = base64.b64decode(encoded_part).decode('utf-8')
+                    if ':' in decoded:
+                        method, password = decoded.split(':', 1)
+                    else:
+                        method, password = "aes-256-gcm", decoded
+                except:
+                    logger.error(f"SS解码失败: {encoded_part}")
+                    return None
+            
+            if not parsed.hostname or not method or not password:
+                return None
             
             return {
                 "protocol": "Shadowsocks",
@@ -163,8 +207,14 @@ class NodeParser:
     def parse_trojan(link: str) -> Optional[Dict]:
         """解析Trojan节点"""
         try:
+            if not link or not link.startswith("trojan://"):
+                return None
+                
             parsed = urlparse(link)
-            query = parse_qs(parsed.query)
+            if not parsed.hostname or not parsed.username:
+                return None
+                
+            query = parse_qs(parsed.query) if parsed.query else {}
             
             return {
                 "protocol": "Trojan",
@@ -172,8 +222,8 @@ class NodeParser:
                 "server": parsed.hostname,
                 "port": parsed.port or 443,
                 "password": parsed.username,
-                "sni": query.get("sni", [""])[0],
-                "security": query.get("security", ["tls"])[0]
+                "sni": query.get("sni", [""])[0] if query.get("sni") else "",
+                "security": query.get("security", ["tls"])[0] if query.get("security") else "tls"
             }
         except Exception as e:
             logger.error(f"Trojan解析失败: {e}")
@@ -183,17 +233,26 @@ class NodeParser:
     def parse_hysteria2(link: str) -> Optional[Dict]:
         """解析Hysteria2节点"""
         try:
+            if not link or not (link.startswith("hy2://") or link.startswith("hysteria2://")):
+                return None
+                
             parsed = urlparse(link)
-            query = parse_qs(parsed.query)
+            if not parsed.hostname:
+                return None
+                
+            query = parse_qs(parsed.query) if parsed.query else {}
+            
+            # 获取密码，可能在username或auth参数中
+            password = parsed.username or (query.get("auth", [""])[0] if query.get("auth") else "")
             
             return {
                 "protocol": "Hysteria2",
                 "name": unquote(parsed.fragment) if parsed.fragment else "Hysteria2 Node",
                 "server": parsed.hostname,
                 "port": parsed.port or 443,
-                "password": parsed.username or query.get("auth", [""])[0],
-                "sni": query.get("sni", [""])[0],
-                "obfs": query.get("obfs", [""])[0]
+                "password": password,
+                "sni": query.get("sni", [""])[0] if query.get("sni") else "",
+                "obfs": query.get("obfs", [""])[0] if query.get("obfs") else ""
             }
         except Exception as e:
             logger.error(f"Hysteria2解析失败: {e}")
@@ -202,197 +261,48 @@ class NodeParser:
     @staticmethod
     def parse_single_node(link: str) -> Optional[Dict]:
         """解析单个节点"""
+        if not link:
+            return None
+            
         link = link.strip()
-        
-        if link.startswith("vmess://"):
-            return NodeParser.parse_vmess(link)
-        elif link.startswith("vless://"):
-            return NodeParser.parse_vless(link)
-        elif link.startswith("ss://"):
-            return NodeParser.parse_shadowsocks(link)
-        elif link.startswith("trojan://"):
-            return NodeParser.parse_trojan(link)
-        elif link.startswith(("hy2://", "hysteria2://")):
-            return NodeParser.parse_hysteria2(link)
-        else:
+        if not link:
             return None
-
-# --- Subscription Parser ---
-class SubscriptionParser:
-    @staticmethod
-    def fetch_subscription(url: str) -> Optional[str]:
-        """获取订阅内容"""
+        
         try:
-            headers = {
-                'User-Agent': 'clash-verge/v1.3.1',
-                'Accept': '*/*',
-                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
-            }
-            
-            response = requests.get(url, headers=headers, timeout=30, verify=False)
-            
-            if response.status_code == 403:
+            if link.startswith("vmess://"):
+                return NodeParser.parse_vmess(link)
+            elif link.startswith("vless://"):
+                return NodeParser.parse_vless(link)
+            elif link.startswith("ss://"):
+                return NodeParser.parse_shadowsocks(link)
+            elif link.startswith("trojan://"):
+                return NodeParser.parse_trojan(link)
+            elif link.startswith(("hy2://", "hysteria2://")):
+                return NodeParser.parse_hysteria2(link)
+            else:
+                logger.warning(f"不支持的协议: {link[:20]}...")
                 return None
-            
-            response.raise_for_status()
-            return response.text
-            
         except Exception as e:
-            logger.error(f"获取订阅失败: {e}")
+            logger.error(f"节点解析异常: {e}")
             return None
-    
-    @staticmethod
-    def parse_subscription_info(response) -> Dict:
-        """解析订阅信息"""
-        info = {}
-        
-        # 从响应头获取流量信息
-        headers = response.headers if hasattr(response, 'headers') else {}
-        
-        if 'subscription-userinfo' in headers:
-            userinfo = headers['subscription-userinfo']
-            parts = userinfo.split(';')
-            for part in parts:
-                if '=' in part:
-                    key, value = part.strip().split('=', 1)
-                    try:
-                        info[key] = int(value)
-                    except ValueError:
-                        info[key] = value
-            
-            # 计算流量信息
-            if 'upload' in info and 'download' in info:
-                info['used_traffic'] = info['upload'] + info['download']
-                info['used_traffic_gb'] = round(info['used_traffic'] / (1024**3), 2)
-            
-            if 'total' in info:
-                info['total_traffic_gb'] = round(info['total'] / (1024**3), 2)
-                if 'used_traffic' in info:
-                    info['remaining_traffic'] = info['total'] - info['used_traffic']
-                    info['remaining_traffic_gb'] = round(info['remaining_traffic'] / (1024**3), 2)
-                    info['usage_percentage'] = round((info['used_traffic'] / info['total']) * 100, 1)
-            
-            if 'expire' in info:
-                try:
-                    expire_time = datetime.fromtimestamp(info['expire'])
-                    info['expire_date'] = expire_time.strftime('%Y/%m/%d %H:%M:%S')
-                    remaining_days = (expire_time - datetime.now()).days
-                    info['remaining_days'] = max(0, remaining_days)
-                except:
-                    pass
-        
-        return info
-    
-    @staticmethod
-    def parse_subscription_content(content: str) -> List[Dict]:
-        """解析订阅内容中的节点"""
-        nodes = []
-        
-        try:
-            # 尝试base64解码
-            try:
-                decoded_content = base64.b64decode(content).decode('utf-8')
-                content = decoded_content
-            except:
-                pass
-            
-            # 按行分割处理
-            lines = content.strip().split('\n')
-            
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    continue
-                
-                node = NodeParser.parse_single_node(line)
-                if node:
-                    nodes.append(node)
-        
-        except Exception as e:
-            logger.error(f"解析订阅内容失败: {e}")
-        
-        return nodes
-    
-    @staticmethod
-    def analyze_subscription(url: str) -> Dict:
-        """分析订阅"""
-        try:
-            # 获取订阅内容
-            response = requests.get(url, headers={
-                'User-Agent': 'clash-verge/v1.3.1'
-            }, timeout=30, verify=False)
-            
-            if response.status_code == 403:
-                return {
-                    "status": "error",
-                    "error": "订阅链接被WAF拦截，请检查链接或稍后重试"
-                }
-            
-            response.raise_for_status()
-            
-            # 解析订阅信息
-            sub_info = SubscriptionParser.parse_subscription_info(response)
-            
-            # 解析节点
-            nodes = SubscriptionParser.parse_subscription_content(response.text)
-            
-            # 统计信息
-            protocols = {}
-            regions = {}
-            
-            for node in nodes:
-                protocol = node.get('protocol', 'Unknown')
-                protocols[protocol] = protocols.get(protocol, 0) + 1
-                
-                # 简单的地区检测
-                name = node.get('name', '').lower()
-                server = node.get('server', '').lower()
-                text = f"{name} {server}"
-                
-                region = "🌍 其他"
-                if any(keyword in text for keyword in ['hk', 'hong kong', '香港']):
-                    region = "🇭🇰 香港"
-                elif any(keyword in text for keyword in ['tw', 'taiwan', '台湾']):
-                    region = "🇹🇼 台湾"
-                elif any(keyword in text for keyword in ['jp', 'japan', '日本']):
-                    region = "🇯🇵 日本"
-                elif any(keyword in text for keyword in ['sg', 'singapore', '新加坡']):
-                    region = "🇸🇬 新加坡"
-                elif any(keyword in text for keyword in ['us', 'usa', '美国']):
-                    region = "🇺🇸 美国"
-                elif any(keyword in text for keyword in ['uk', 'britain', '英国']):
-                    region = "🇬🇧 英国"
-                
-                regions[region] = regions.get(region, 0) + 1
-            
-            return {
-                "status": "success",
-                "subscription_info": sub_info,
-                "nodes": nodes,
-                "statistics": {
-                    "total_nodes": len(nodes),
-                    "protocols": protocols,
-                    "regions": regions
-                }
-            }
-            
-        except Exception as e:
-            return {
-                "status": "error",
-                "error": str(e)
-            }
 
 # --- Speed Tester ---
 class SpeedTester:
     @staticmethod
     def test_connectivity(server: str, port: int) -> Dict:
         """测试连通性"""
+        if not server or not port:
+            return {
+                "status": "error",
+                "error": "服务器地址或端口无效"
+            }
+            
         try:
             start_time = time.time()
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(10)
             
-            result = sock.connect_ex((server, port))
+            result = sock.connect_ex((str(server), int(port)))
             end_time = time.time()
             sock.close()
             
@@ -412,7 +322,7 @@ class SpeedTester:
         except Exception as e:
             return {
                 "status": "error",
-                "error": str(e)
+                "error": f"连接测试异常: {str(e)}"
             }
     
     @staticmethod
@@ -460,15 +370,23 @@ class SpeedTester:
                 return {"status": "failed", "error": "无效的测试结果"}
                 
         except Exception as e:
-            return {"status": "error", "error": str(e)}
+            return {"status": "error", "error": f"速度测试异常: {str(e)}"}
     
     @staticmethod
     def test_node(node: Dict) -> Dict:
         """测试节点"""
+        if not node:
+            return {
+                "name": "Unknown Node",
+                "status_emoji": "❌",
+                "status_text": "节点信息无效",
+                "error": "节点解析失败"
+            }
+            
         result = {
             "name": node.get('name', 'Unknown Node'),
-            "server": node.get('server'),
-            "port": node.get('port'),
+            "server": node.get('server', 'unknown'),
+            "port": node.get('port', 0),
             "protocol": node.get('protocol', 'unknown'),
             "test_time": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         }
@@ -500,6 +418,7 @@ class SpeedTester:
             else:
                 result['status_emoji'] = '❌'
                 result['status_text'] = '测速失败'
+                result['speed_error'] = speed_result.get('error', '未知错误')
         else:
             result['status_emoji'] = '❌'
             result['status_text'] = '连接失败'
@@ -519,14 +438,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 🚀 **功能特色：**
 • 支持多种协议：VMess, VLess, SS, Hysteria2, Trojan
-• 订阅链接解析与流量分析
-• 真实速度测试
-• 节点连通性检测
+• 真实连通性测试
+• 下载速度测试
+• 节点信息解析
 
 📝 **使用方法：**
 • 直接发送节点链接进行测速
-• 发送订阅链接获取分析
-• 发送多个节点进行批量测试
+• 支持的格式：vmess://, vless://, ss://, hy2://, hysteria2://
 
 🔧 **VPS管理：**
 • 在VPS中输入 `ikunss` 进入管理菜单
@@ -548,21 +466,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
         text = update.message.text
         if not text:
+            await update.message.reply_text("❌ 请发送有效的文本消息")
             return
 
         # 发送处理中消息
         processing_message = await update.message.reply_text("⏳ 正在处理您的请求，请稍候...")
         
         try:
-            # 检查是否是单个节点链接
+            # 检查是否是节点链接
             if any(text.startswith(prefix) for prefix in ['vmess://', 'vless://', 'ss://', 'hy2://', 'hysteria2://', 'trojan://']):
-                await processing_message.edit_text("🔍 检测到节点链接，开始解析和测速...")
+                await processing_message.edit_text("🔍 检测到节点链接，开始解析...")
                 
                 # 解析节点
                 node = NodeParser.parse_single_node(text)
                 if not node:
-                    await processing_message.edit_text("❌ 节点链接解析失败，请检查格式是否正确")
+                    await processing_message.edit_text(
+                        "❌ **节点解析失败**\n\n"
+                        "可能的原因：\n"
+                        "• 节点链接格式不正确\n"
+                        "• 缺少必要的参数\n"
+                        "• 编码问题\n\n"
+                        "请检查节点链接是否完整和正确"
+                    )
                     return
+                
+                await processing_message.edit_text("✅ 节点解析成功，开始测速...")
                 
                 # 执行测速
                 result = SpeedTester.test_node(node)
@@ -573,108 +501,57 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 result_text += f"🌐 **服务器:** {result.get('server')}:{result.get('port')}\n"
                 result_text += f"🔗 **协议:** {result.get('protocol')}\n"
                 
-                if result.get('latency_ms'):
+                if result.get('latency_ms') is not None:
                     result_text += f"⏱️ **延迟:** {result.get('latency_ms')}ms\n"
                 
                 if result.get('download_speed_mbps'):
                     result_text += f"⚡ **速度:** {result.get('download_speed_mbps')} MB/s\n"
-                    result_text += f"📊 **状态:** {result.get('status_emoji')} {result.get('status_text')}\n"
-                    if result.get('downloaded_mb'):
-                        result_text += f"💾 **剩余流量:** 500GB\n"
-                else:
-                    result_text += f"📊 **状态:** {result.get('status_emoji')} {result.get('status_text')}\n"
+                    result_text += f"📊 **测试时长:** {result.get('test_duration', 0)}s\n"
+                    result_text += f"💾 **下载量:** {result.get('downloaded_mb', 0)}MB\n"
+                
+                result_text += f"📈 **状态:** {result.get('status_emoji')} {result.get('status_text')}\n"
+                
+                if result.get('error'):
+                    result_text += f"❌ **错误:** {result.get('error')}\n"
+                
+                result_text += f"\n⏰ **测试时间:** {result.get('test_time')}"
                 
                 await processing_message.edit_text(result_text, parse_mode='Markdown')
-                
-            elif text.startswith(('http://', 'https://')):
-                await processing_message.edit_text("🔗 检测到订阅链接，正在分析...")
-                
-                # 分析订阅
-                sub_result = SubscriptionParser.analyze_subscription(text)
-                
-                if sub_result.get("status") == "success":
-                    sub_info = sub_result.get("subscription_info", {})
-                    stats = sub_result.get("statistics", {})
-                    
-                    result_text = "📊 **订阅分析结果**\n\n"
-                    
-                    # 流量信息
-                    if sub_info.get('total_traffic_gb'):
-                        used = sub_info.get('used_traffic_gb', 0)
-                        total = sub_info.get('total_traffic_gb', 0)
-                        remaining = sub_info.get('remaining_traffic_gb', 0)
-                        percentage = sub_info.get('usage_percentage', 0)
-                        
-                        result_text += f"📈 **流量详情:** {used} GB / {total} GB\n"
-                        result_text += f"📊 **使用进度:** {percentage}%\n"
-                        result_text += f"💾 **剩余可用:** {remaining} GB\n"
-                    
-                    # 过期时间
-                    if sub_info.get('expire_date'):
-                        remaining_days = sub_info.get('remaining_days', 0)
-                        result_text += f"⏰ **过期时间:** {sub_info['expire_date']} (剩余{remaining_days}天)\n"
-                    
-                    result_text += "\n"
-                    
-                    # 节点统计
-                    total_nodes = stats.get('total_nodes', 0)
-                    protocols = stats.get('protocols', {})
-                    regions = stats.get('regions', {})
-                    
-                    result_text += f"🌐 **节点总数:** {total_nodes}\n"
-                    
-                    if protocols:
-                        protocol_list = ', '.join(protocols.keys())
-                        result_text += f"🔐 **协议类型:** {protocol_list}\n"
-                    
-                    if regions:
-                        region_list = list(regions.keys())[:5]  # 显示前5个地区
-                        regions_text = ', '.join([r.split(' ', 1)[1] if ' ' in r else r for r in region_list])
-                        result_text += f"🗺️ **覆盖范围:** {regions_text}\n"
-                    
-                    await processing_message.edit_text(result_text, parse_mode='Markdown')
-                    
-                    # 如果有节点，询问是否测速
-                    nodes = sub_result.get("nodes", [])
-                    if nodes and len(nodes) > 0:
-                        test_keyboard = InlineKeyboardMarkup([
-                            [InlineKeyboardButton("🚀 测试前5个节点", callback_data="test_nodes_5")],
-                            [InlineKeyboardButton("📊 测试全部节点", callback_data="test_nodes_all")]
-                        ])
-                        
-                        await context.bot.send_message(
-                            chat_id=update.effective_chat.id,
-                            text=f"发现 {len(nodes)} 个节点，是否需要测速？",
-                            reply_markup=test_keyboard
-                        )
-                else:
-                    await processing_message.edit_text(
-                        f"❌ **订阅分析失败**\n\n错误: {sub_result.get('error', '未知错误')}",
-                        parse_mode='Markdown'
-                    )
                 
             else:
                 await processing_message.edit_text(
                     "❓ **无法识别的格式**\n\n"
                     "**支持的格式：**\n"
-                    "• 单个节点链接 (vmess://, vless://, ss://, hy2://, trojan://)\n"
-                    "• 订阅链接 (http/https)\n"
-                    "• 在VPS中输入 `ikunss` 进入管理菜单\n\n"
-                    "💡 **提示：** 直接粘贴节点链接或订阅地址即可",
+                    "• VMess: `vmess://...`\n"
+                    "• VLess: `vless://...`\n"
+                    "• Shadowsocks: `ss://...`\n"
+                    "• Hysteria2: `hy2://...` 或 `hysteria2://...`\n"
+                    "• Trojan: `trojan://...`\n\n"
+                    "💡 **提示：** 直接粘贴完整的节点链接即可\n"
+                    "🔧 **VPS管理：** 在服务器中输入 `ikunss` 进入管理菜单",
                     parse_mode='Markdown'
                 )
             
         except Exception as e:
             logger.error(f"消息处理过程中出错: {e}")
-            await processing_message.edit_text(f"❌ 处理过程中出现错误: {str(e)}")
+            error_msg = f"❌ **处理过程中出现错误**\n\n错误信息: {str(e)}\n\n请检查输入格式或稍后重试"
+            try:
+                await processing_message.edit_text(error_msg, parse_mode='Markdown')
+            except:
+                await processing_message.edit_text("❌ 处理失败，请稍后重试")
                 
     except Exception as e:
         logger.error(f"handle_message 严重错误: {e}")
+        try:
+            await update.message.reply_text("❌ 系统错误，请稍后重试")
+        except:
+            pass
 
 # --- Error Handler ---
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """处理错误"""
     logger.error(f"Exception while handling an update: {context.error}")
+    logger.error(f"Traceback: {traceback.format_exc()}")
 
 # --- Main Function ---
 def main() -> None:
@@ -705,6 +582,7 @@ def main() -> None:
 
     except Exception as e:
         logger.critical(f"❌ 机器人启动失败: {e}")
+        logger.critical(f"错误详情: {traceback.format_exc()}")
         sys.exit(1)
 
 if __name__ == '__main__':
