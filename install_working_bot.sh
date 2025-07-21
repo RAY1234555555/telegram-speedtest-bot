@@ -219,6 +219,11 @@ EOF
 
 sudo_if_needed chmod 644 "$SYSTEMD_SERVICE_PATH"
 
+# --- 安装管理命令 ---
+log_info "🔧 安装管理命令..."
+sudo_if_needed cp ikunss /usr/local/bin/ikunss
+sudo_if_needed chmod +x /usr/local/bin/ikunss
+
 # --- 启动服务 ---
 log_info "🔄 启动服务..."
 sudo_if_needed systemctl daemon-reload
@@ -252,7 +257,7 @@ TEST_MESSAGE="🎉 IKUN测速机器人安装成功！
 📊 支持订阅分析
 
 发送节点链接开始测速
-发送 ikunss 进入管理菜单
+在VPS中输入 ikunss 进入管理菜单
 
 安装时间: $(date)"
 
@@ -270,7 +275,10 @@ echo "📊 服务状态: $(sudo systemctl is-active $BOT_SERVICE_NAME)"
 echo "🌐 API 地址: $TELEGRAM_API_URL"
 echo "👥 授权用户: $ALLOWED_USER_IDS"
 echo ""
-echo "🔧 管理命令:"
+echo "🔧 VPS管理命令:"
+echo "   输入: ikunss"
+echo ""
+echo "🔧 系统管理命令:"
 echo "   查看日志: sudo journalctl -u $BOT_SERVICE_NAME -f"
 echo "   重启服务: sudo systemctl restart $BOT_SERVICE_NAME"
 echo "   停止服务: sudo systemctl stop $BOT_SERVICE_NAME"
@@ -278,10 +286,11 @@ echo "   服务状态: sudo systemctl status $BOT_SERVICE_NAME"
 echo ""
 echo "🤖 机器人命令:"
 echo "   发送 /start 开始使用"
-echo "   发送 ikunss 进入管理菜单"
 echo "   直接发送节点链接进行测速"
+echo "   发送订阅链接进行分析"
 echo ""
 echo "🚀 现在可以开始使用机器人了！"
+echo "💡 在VPS中输入 'ikunss' 进入管理菜单"
 echo ""
 
 exit 0
