@@ -99,7 +99,7 @@ class RealSpeedTester:
         }
 
     def resolve_domain(self, domain: str) -> Optional[str]:
-        """解���域名获取IP地址"""
+        """解析域名获取IP地址"""
         try:
             ip = socket.gethostbyname(domain)
             logger.info(f"Resolved {domain} to {ip}")
